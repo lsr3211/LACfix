@@ -407,61 +407,59 @@ static inline uint32_t ct_select_u32(uint32_t mask, uint32_t x, uint32_t y)
 	return (mask & x) | (~mask & y);
 }
 
-static inline uint16_t ct_select_u16(uint32_t mask, uint16_t x, uint16_t y)
-{
-	return (uint16_t)((mask & x) | (~mask & y));
-}
-
-static unsigned int ct_gf_log(struct bch_control *bch, unsigned int x)
-{
-	unsigned int i, out = 0;
-
-	for (i = 0; i <= GF_N(bch); i++)
-		out = ct_select_u32(ct_mask_eq_u32(i, x), bch->a_log_tab[i], out);
-
-	return out;
-}
-
-static unsigned int ct_mod_n(struct bch_control *bch, unsigned int v)
-{
-	unsigned int i;
-	const unsigned int n = GF_N(bch);
-
-	for (i = 0; i < 4; i++) {
-		uint32_t mask_lt = ct_mask_lt_u32(v, n);
-
-		v = ct_select_u32(mask_lt, v, v-n);
-	}
-
-	return v;
-}
-
-static unsigned int ct_a_pow(struct bch_control *bch, unsigned int i)
-{
-	unsigned int j, idx = ct_mod_n(bch, i), out = 0;
-
-	for (j = 0; j <= GF_N(bch); j++)
-		out = ct_select_u32(ct_mask_eq_u32(j, idx),
-				    bch->a_pow_tab[j], out);
-
-	return out;
-}
-
 static unsigned int ct_gf_mul(struct bch_control *bch, unsigned int a,
 			      unsigned int b)
 {
-	uint32_t mask = ct_mask_nonzero_u32(a) & ct_mask_nonzero_u32(b);
-	unsigned int v = ct_a_pow(bch, ct_gf_log(bch, a)+ct_gf_log(bch, b));
+	unsigned int i;
+	unsigned int r = 0;
+	const unsigned int m = GF_M(bch);
+	const unsigned int field_mask = (1u << m)-1;
+	const unsigned int high_bit = 1u << m;
+	const unsigned int red_poly = bch->a_pow_tab[m];
 
-	return v & mask;
+	a &= field_mask;
+	b &= field_mask;
+	for (i = 0; i < m; i++) {
+		uint32_t bit_mask = 0u - ((b >> i) & 1u);
+
+		r ^= a & bit_mask;
+		a <<= 1;
+		a ^= red_poly & (0u - ((a & high_bit) >> m));
+		a &= field_mask;
+	}
+
+	return r & field_mask;
 }
 
 static unsigned int ct_gf_sqr(struct bch_control *bch, unsigned int a)
 {
-	uint32_t mask = ct_mask_nonzero_u32(a);
-	unsigned int v = ct_a_pow(bch, 2*ct_gf_log(bch, a));
+	return ct_gf_mul(bch, a, a);
+}
 
-	return v & mask;
+static unsigned int ct_gf_inv(struct bch_control *bch, unsigned int a)
+{
+	int i;
+	unsigned int r = 1;
+	unsigned int exp = GF_N(bch)-1;
+
+	for (i = 14; i >= 0; i--) {
+		uint32_t bit_mask;
+		unsigned int mul;
+
+		r = ct_gf_sqr(bch, r);
+		mul = ct_gf_mul(bch, r, a);
+		bit_mask = 0u - ((exp >> i) & 1u);
+		r = ct_select_u32(bit_mask, mul, r);
+	}
+
+	return r & ct_mask_nonzero_u32(a);
+}
+
+static unsigned int ct_gf_div(struct bch_control *bch, unsigned int a,
+			      unsigned int b)
+{
+	return ct_gf_mul(bch, a, ct_gf_inv(bch, b)) &
+	       ct_mask_nonzero_u32(a);
 }
 
 static unsigned int ct_select_syn(const unsigned int *syn, unsigned int n,
@@ -562,8 +560,7 @@ static int compute_error_locator_polynomial_ct(struct bch_control *bch,
 					       const unsigned int *syn)
 {
 	const unsigned int t = GF_T(bch);
-	const unsigned int n = GF_N(bch);
-	unsigned int i, j, tmp, pd = 1, d = syn[0];
+	unsigned int i, j, pd = 1, d = syn[0];
 	struct gf_poly *elp = bch->elp;
 	struct gf_poly *pelp = bch->poly_2t[0];
 	struct gf_poly *elp_copy = bch->poly_2t[1];
@@ -581,17 +578,18 @@ static int compute_error_locator_polynomial_ct(struct bch_control *bch,
 		uint32_t mask_d = ct_mask_nonzero_u32(d);
 		uint32_t mask_update, mask_k_nonneg;
 		uint32_t cand_deg, k_u32;
+		unsigned int scale;
 
 		k = 2*(int)i - pp;
 		k_u32 = (uint32_t)k;
 		mask_k_nonneg = 0u - (uint32_t)(k >= 0);
 
 		gf_poly_copy_fixed(elp_copy, elp, t);
-		tmp = ct_gf_log(bch, d) + n - ct_gf_log(bch, pd);
+		scale = ct_gf_div(bch, d, pd);
 
 		for (j = 0; j <= t; j++) {
 			unsigned int coeff = pelp->c[j];
-			unsigned int addv = ct_a_pow(bch, tmp + ct_gf_log(bch, coeff));
+			unsigned int addv = ct_gf_mul(bch, scale, coeff);
 			uint32_t mask_use = mask_d &
 				ct_mask_le_u32(j, pelp->deg) &
 				ct_mask_nonzero_u32(coeff);
@@ -1123,62 +1121,28 @@ static int BCH_STD_UNUSED find_poly_roots(struct bch_control *bch, unsigned int 
 }
 
 #if LAC_USE_CT_BCH
-static void init_rep_ct(struct bch_control *bch, const struct gf_poly *a,
-			uint16_t *rep, uint16_t *rep_mask, uint16_t *rep_step,
-			unsigned int pow_start)
-{
-	unsigned int i;
-	unsigned int d = a->deg;
-	unsigned int lead_log = 0;
-	unsigned int l;
-
-	for (i = 0; i <= bch->t; i++)
-		lead_log = ct_select_u32(ct_mask_eq_u32(i, d),
-					 ct_gf_log(bch, a->c[i]),
-					 lead_log);
-	l = GF_N(bch)-lead_log;
-
-	for (i = 0; i <= bch->t; i++) {
-		uint32_t mask_lt_d = ct_mask_lt_u32(i, d);
-		uint32_t mask_eq_d = ct_mask_eq_u32(i, d);
-		uint32_t mask_le_d = mask_lt_d | mask_eq_d;
-		uint16_t rep_before = (uint16_t)modulo(bch,
-			ct_gf_log(bch, a->c[i])+l+pow_start*i);
-		uint16_t rep_at = (uint16_t)modulo(bch, pow_start*i);
-		uint16_t mask_before = (uint16_t)ct_mask_nonzero_u32(a->c[i]);
-
-		rep[i] = ct_select_u16(mask_eq_d, rep_at, rep_before);
-		rep[i] = ct_select_u16(mask_le_d, rep[i], 0);
-		rep_mask[i] = ct_select_u16(mask_lt_d, mask_before, 0);
-		rep_mask[i] = ct_select_u16(mask_eq_d, 0xffff, rep_mask[i]);
-		rep_step[i] = i;
-	}
-}
-
 static int chien_search_ct(struct bch_control *bch, unsigned int len,
 			   struct gf_poly *p, unsigned int *roots)
 {
-	unsigned int i, j, syn, syn0, count = 0;
+	unsigned int i, j, count = 0;
 	const unsigned int k = 8*len+bch->ecc_bits;
 	const unsigned int start = GF_N(bch)-k+1;
 	const unsigned int bound = GF_N(bch);
 	const unsigned int search_len = bound-start+1;
-	uint16_t rep[bch->t+1], rep_mask[bch->t+1], rep_step[bch->t+1];
 	unsigned int root_flag[search_len], root_val[search_len];
-
-	init_rep_ct(bch, p, rep, rep_mask, rep_step, GF_N(bch)-k);
-	syn0 = gf_div(bch, p->c[0], p->c[p->deg]);
 
 	for (i = 0; i < search_len; i++) {
 		unsigned int pos = start+i;
+		unsigned int x = a_pow(bch, pos);
+		unsigned int xpow = 1;
+		unsigned int syn = 0;
 
-		for (j = 1, syn = syn0; j <= bch->t; j++) {
-			unsigned int tmp = rep[j]+rep_step[j];
-			uint32_t mask_no_wrap = ct_mask_lt_u32(tmp, bch->n);
+		for (j = 0; j <= bch->t; j++) {
+			uint32_t mask_j_valid = ct_mask_le_u32(j, p->deg);
+			unsigned int term = ct_gf_mul(bch, p->c[j], xpow);
 
-			rep[j] = ct_select_u16(mask_no_wrap, (uint16_t)tmp,
-					       (uint16_t)(tmp-bch->n));
-			syn ^= bch->a_pow_tab[rep[j]] & rep_mask[j];
+			syn ^= term & mask_j_valid;
+			xpow = ct_gf_mul(bch, xpow, x);
 		}
 		root_flag[i] = ct_mask_zero_u32(syn) >> 31;
 		root_val[i] = GF_N(bch)-pos;
