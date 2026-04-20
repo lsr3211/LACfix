@@ -345,6 +345,8 @@ static void BCH_STD_UNUSED compute_syndromes(struct bch_control *bch,
 }
 
 #if LAC_USE_CT_BCH
+static unsigned int ct_gf_sqr(struct bch_control *bch, unsigned int a);
+
 static void compute_syndromes_ct(struct bch_control *bch, uint32_t *ecc,
 				 unsigned int *syn)
 {
@@ -372,7 +374,7 @@ static void compute_syndromes_ct(struct bch_control *bch, uint32_t *ecc,
 	} while (s > 0);
 
 	for (j = 0; j < t; j++)
-		syn[2*j+1] = gf_sqr(bch, syn[j]);
+		syn[2*j+1] = ct_gf_sqr(bch, syn[j]);
 }
 
 static inline uint32_t ct_mask_nonzero_u32(uint32_t x)
@@ -403,6 +405,75 @@ static inline uint32_t ct_mask_eq_u32(uint32_t a, uint32_t b)
 static inline uint32_t ct_select_u32(uint32_t mask, uint32_t x, uint32_t y)
 {
 	return (mask & x) | (~mask & y);
+}
+
+static inline uint16_t ct_select_u16(uint32_t mask, uint16_t x, uint16_t y)
+{
+	return (uint16_t)((mask & x) | (~mask & y));
+}
+
+static unsigned int ct_gf_log(struct bch_control *bch, unsigned int x)
+{
+	unsigned int i, out = 0;
+
+	for (i = 0; i <= GF_N(bch); i++)
+		out = ct_select_u32(ct_mask_eq_u32(i, x), bch->a_log_tab[i], out);
+
+	return out;
+}
+
+static unsigned int ct_mod_n(struct bch_control *bch, unsigned int v)
+{
+	unsigned int i;
+	const unsigned int n = GF_N(bch);
+
+	for (i = 0; i < 4; i++) {
+		uint32_t mask_lt = ct_mask_lt_u32(v, n);
+
+		v = ct_select_u32(mask_lt, v, v-n);
+	}
+
+	return v;
+}
+
+static unsigned int ct_a_pow(struct bch_control *bch, unsigned int i)
+{
+	unsigned int j, idx = ct_mod_n(bch, i), out = 0;
+
+	for (j = 0; j <= GF_N(bch); j++)
+		out = ct_select_u32(ct_mask_eq_u32(j, idx),
+				    bch->a_pow_tab[j], out);
+
+	return out;
+}
+
+static unsigned int ct_gf_mul(struct bch_control *bch, unsigned int a,
+			      unsigned int b)
+{
+	uint32_t mask = ct_mask_nonzero_u32(a) & ct_mask_nonzero_u32(b);
+	unsigned int v = ct_a_pow(bch, ct_gf_log(bch, a)+ct_gf_log(bch, b));
+
+	return v & mask;
+}
+
+static unsigned int ct_gf_sqr(struct bch_control *bch, unsigned int a)
+{
+	uint32_t mask = ct_mask_nonzero_u32(a);
+	unsigned int v = ct_a_pow(bch, 2*ct_gf_log(bch, a));
+
+	return v & mask;
+}
+
+static unsigned int ct_select_syn(const unsigned int *syn, unsigned int n,
+				  unsigned int idx, uint32_t valid_mask)
+{
+	unsigned int i, out = 0;
+
+	for (i = 0; i < n; i++)
+		out = ct_select_u32(valid_mask & ct_mask_eq_u32(i, idx),
+				    syn[i], out);
+
+	return out;
 }
 
 static void gf_poly_copy_fixed(struct gf_poly *dst,
@@ -516,11 +587,11 @@ static int compute_error_locator_polynomial_ct(struct bch_control *bch,
 		mask_k_nonneg = 0u - (uint32_t)(k >= 0);
 
 		gf_poly_copy_fixed(elp_copy, elp, t);
-		tmp = bch->a_log_tab[d] + n - bch->a_log_tab[pd];
+		tmp = ct_gf_log(bch, d) + n - ct_gf_log(bch, pd);
 
 		for (j = 0; j <= t; j++) {
 			unsigned int coeff = pelp->c[j];
-			unsigned int addv = a_pow(bch, tmp + bch->a_log_tab[coeff]);
+			unsigned int addv = ct_a_pow(bch, tmp + ct_gf_log(bch, coeff));
 			uint32_t mask_use = mask_d &
 				ct_mask_le_u32(j, pelp->deg) &
 				ct_mask_nonzero_u32(coeff);
@@ -553,11 +624,12 @@ static int compute_error_locator_polynomial_ct(struct bch_control *bch,
 
 			for (j = 1; j <= t; j++) {
 				unsigned int sidx = sidx_base - j;
-				unsigned int synv = (j <= sidx_base) ? syn[sidx] : 0;
 				uint32_t mask_use = ct_mask_le_u32(j, elp->deg) &
 					ct_mask_le_u32(j, sidx_base);
+				unsigned int synv = ct_select_syn(syn, 2*t, sidx,
+								  mask_use);
 
-				d_next ^= gf_mul(bch, elp->c[j], synv) &
+				d_next ^= ct_gf_mul(bch, elp->c[j], synv) &
 					  mask_use;
 			}
 			d = d_next;
@@ -1055,21 +1127,30 @@ static void init_rep_ct(struct bch_control *bch, const struct gf_poly *a,
 			uint16_t *rep, uint16_t *rep_mask, uint16_t *rep_step,
 			unsigned int pow_start)
 {
-	int i;
-	int d = a->deg;
-	int l = GF_N(bch)-a_log(bch, a->c[a->deg]);
+	unsigned int i;
+	unsigned int d = a->deg;
+	unsigned int lead_log = 0;
+	unsigned int l;
 
-	for (i = 0; i < d; i++) {
-		rep[i] = modulo(bch, a_log(bch, a->c[i])+l+pow_start*i);
-		rep_mask[i] = a->c[i] ? 0xffff : 0;
-		rep_step[i] = i;
-	}
-	rep[d] = modulo(bch, pow_start*d);
-	rep_mask[d] = 0xffff;
-	rep_step[d] = d;
-	for (i = d+1; i <= (int)bch->t; i++) {
-		rep[i] = 0;
-		rep_mask[i] = 0;
+	for (i = 0; i <= bch->t; i++)
+		lead_log = ct_select_u32(ct_mask_eq_u32(i, d),
+					 ct_gf_log(bch, a->c[i]),
+					 lead_log);
+	l = GF_N(bch)-lead_log;
+
+	for (i = 0; i <= bch->t; i++) {
+		uint32_t mask_lt_d = ct_mask_lt_u32(i, d);
+		uint32_t mask_eq_d = ct_mask_eq_u32(i, d);
+		uint32_t mask_le_d = mask_lt_d | mask_eq_d;
+		uint16_t rep_before = (uint16_t)modulo(bch,
+			ct_gf_log(bch, a->c[i])+l+pow_start*i);
+		uint16_t rep_at = (uint16_t)modulo(bch, pow_start*i);
+		uint16_t mask_before = (uint16_t)ct_mask_nonzero_u32(a->c[i]);
+
+		rep[i] = ct_select_u16(mask_eq_d, rep_at, rep_before);
+		rep[i] = ct_select_u16(mask_le_d, rep[i], 0);
+		rep_mask[i] = ct_select_u16(mask_lt_d, mask_before, 0);
+		rep_mask[i] = ct_select_u16(mask_eq_d, 0xffff, rep_mask[i]);
 		rep_step[i] = i;
 	}
 }
@@ -1093,8 +1174,10 @@ static int chien_search_ct(struct bch_control *bch, unsigned int len,
 
 		for (j = 1, syn = syn0; j <= bch->t; j++) {
 			unsigned int tmp = rep[j]+rep_step[j];
+			uint32_t mask_no_wrap = ct_mask_lt_u32(tmp, bch->n);
 
-			rep[j] = (tmp < bch->n) ? tmp : tmp-bch->n;
+			rep[j] = ct_select_u16(mask_no_wrap, (uint16_t)tmp,
+					       (uint16_t)(tmp-bch->n));
 			syn ^= bch->a_pow_tab[rep[j]] & rep_mask[j];
 		}
 		root_flag[i] = ct_mask_zero_u32(syn) >> 31;
@@ -1194,9 +1277,11 @@ int decode_bch(struct bch_control *bch, const uint8_t *data, unsigned int len,
 				bch->ecc_buf[i] ^= bch->ecc_buf2[i];
 				sum |= bch->ecc_buf[i];
 			}
+			#if !LAC_USE_CT_BCH
 			if (!sum)
 				/* no error found */
 				return 0;
+			#endif
 		}
 		#if LAC_USE_CT_BCH
 		compute_syndromes_ct(bch, bch->ecc_buf, bch->syn);
@@ -1221,8 +1306,24 @@ int decode_bch(struct bch_control *bch, const uint8_t *data, unsigned int len,
 			err = -1;
 	}
 	if (err > 0) {
-		/* post-process raw error locations for easier correction */
 		nbits = (len*8)+bch->ecc_bits;
+		#if LAC_USE_CT_BCH
+		{
+			uint32_t invalid = 0;
+
+			for (i = 0; i < (int)bch->t; i++) {
+				uint32_t mask_valid = ct_mask_lt_u32(i, err);
+				uint32_t mask_in_range = ct_mask_lt_u32(errloc[i], nbits);
+				unsigned int loc = nbits-1-errloc[i];
+
+				loc = (loc & ~7)|(7-(loc & 7));
+				errloc[i] = ct_select_u32(mask_valid, loc, errloc[i]);
+				invalid |= mask_valid & ~mask_in_range;
+			}
+			if (invalid)
+				err = -1;
+		}
+		#else
 		for (i = 0; i < err; i++) {
 			if (errloc[i] >= nbits) {
 				err = -1;
@@ -1231,6 +1332,7 @@ int decode_bch(struct bch_control *bch, const uint8_t *data, unsigned int len,
 			errloc[i] = nbits-1-errloc[i];
 			errloc[i] = (errloc[i] & ~7)|(7-(errloc[i] & 7));
 		}
+		#endif
 	}
 	return (err >= 0) ? err : -EBADMSG;
 }
