@@ -1,0 +1,6 @@
+*.o
+*.i
+*.s
+lac
+perf.data
+perf_kem.data
