@@ -1,4 +1,5 @@
 #include <string.h>
+#include <stdint.h>
 #include "api.h"
 #include "rand.h"
 #include "bch.h"
@@ -6,6 +7,24 @@
 #include "bin-lwe.h"
 #include "compat.h"
 #define RATIO 125
+
+static inline uint32_t enc_ct_mask_lt_u32(uint32_t a, uint32_t b)
+{
+	uint64_t diff = (uint64_t)a - (uint64_t)b;
+	return 0u - (uint32_t)(diff >> 63);
+}
+
+static inline uint32_t enc_ct_mask_ge_u32(uint32_t a, uint32_t b)
+{
+	return ~enc_ct_mask_lt_u32(a, b);
+}
+
+#ifdef LAC256
+static inline uint32_t enc_ct_select_u32(uint32_t mask, uint32_t x, uint32_t y)
+{
+	return (mask & x) | (~mask & y);
+}
+#endif
 
 //key generation
 int crypto_encrypt_keypair( unsigned char *pk, unsigned char *sk)
@@ -141,7 +160,33 @@ int pke_dec(const unsigned char *sk, const unsigned char *c,unsigned long long c
 		//D2 decoding:compute m*q/2+e1 + m*q/2+e2 in [0,2*Q]
 		temp1=(c2[i]-out[i]+Q)%Q;
 		temp2=(c2[i+vec_bound]-out[i+vec_bound]+Q)%Q;
-		
+
+#if LAC_USE_CT_PKE_DEC
+		//shift
+		{
+			uint32_t mask1 = enc_ct_mask_lt_u32((uint32_t)temp1,
+							    (uint32_t)center_point);
+			uint32_t mask2 = enc_ct_mask_lt_u32((uint32_t)temp2,
+							    (uint32_t)center_point);
+
+			temp1 = (int)enc_ct_select_u32(mask1, (uint32_t)(Q-temp1),
+						       (uint32_t)temp1);
+			temp2 = (int)enc_ct_select_u32(mask2, (uint32_t)(Q-temp2),
+						       (uint32_t)temp2);
+		}
+		//merge erors
+		temp1+=temp2-Q;
+
+		//recover m from m*q/2+e1 + m*q/2+e2, RATIO=q/2
+		{
+			uint32_t bit_mask =
+				enc_ct_mask_lt_u32((uint32_t)temp1,
+						   (uint32_t)d2_bound) &
+				(1u << (i%8));
+
+			p_code[i/8] ^= (unsigned char)bit_mask;
+		}
+#else
 		//shift
 		if(temp1<center_point)
 		{
@@ -159,6 +204,7 @@ int pke_dec(const unsigned char *sk, const unsigned char *c,unsigned long long c
 		{
 			p_code[i/8]=p_code[i/8]^(1<<(i%8));
 		}
+#endif
 	}
 	//bch decode to recover m
 	ecc_dec(m_buf,code);
@@ -187,11 +233,23 @@ int pke_dec(const unsigned char *sk, const unsigned char *c,unsigned long long c
 		//compute m*q/2+e in [0,Q]
 		temp=(c2[i]-out[i]+Q)%Q;
 		
+#if LAC_USE_CT_PKE_DEC
+		//recover m from m*q/2+e, RATIO=q/2
+		{
+			uint32_t bit_mask =
+				enc_ct_mask_ge_u32((uint32_t)temp, (uint32_t)low) &
+				enc_ct_mask_lt_u32((uint32_t)temp, (uint32_t)high) &
+				(1u << (i%8));
+
+			p_code[i/8] ^= (unsigned char)bit_mask;
+		}
+#else
 		//recover m from m*q/2+e, RATIO=q/2
 		if(temp>=low && temp<high)
 		{
 			p_code[i/8]=p_code[i/8]^(1<<(i%8));
 		}
+#endif
 	}
 	
 	//bch decode to recover m

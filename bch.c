@@ -347,6 +347,24 @@ static void BCH_STD_UNUSED compute_syndromes(struct bch_control *bch,
 #if LAC_USE_CT_BCH
 static unsigned int ct_gf_sqr(struct bch_control *bch, unsigned int a);
 
+static unsigned int BCH_STD_UNUSED syndrome_a_pow_ct(struct bch_control *bch,
+						     int i)
+{
+	unsigned int idx = (unsigned int)modulo(bch, i);
+	unsigned int out = 0;
+	unsigned int k;
+
+	for (k = 0; k <= GF_N(bch); k++) {
+		uint32_t diff = k ^ idx;
+		uint32_t nonzero = (diff | (0u - diff)) >> 31;
+		uint32_t mask = 0u - (nonzero ^ 1u);
+
+		out |= ((unsigned int)bch->a_pow_tab[k]) & mask;
+	}
+
+	return out;
+}
+
 static void compute_syndromes_data_ecc_ct(struct bch_control *bch,
 					  const uint8_t *data,
 					  unsigned int len,
@@ -371,7 +389,8 @@ static void compute_syndromes_data_ecc_ct(struct bch_control *bch,
 			int j;
 
 			for (j = 0; j < 2*t; j += 2)
-				syn[j] ^= a_pow(bch, (j+1)*exp) & bit_mask;
+				syn[j] ^= syndrome_a_pow_ct(bch, (j+1)*exp) &
+					  bit_mask;
 		}
 	}
 
@@ -387,7 +406,9 @@ static void compute_syndromes_data_ecc_ct(struct bch_control *bch,
 				int j;
 
 				for (j = 0; j < 2*t; j += 2)
-					syn[j] ^= a_pow(bch, (j+1)*exp) & bit_mask;
+					syn[j] ^= syndrome_a_pow_ct(bch,
+								    (j+1)*exp) &
+						  bit_mask;
 			}
 		}
 	}
@@ -417,8 +438,15 @@ static void compute_syndromes_ct(struct bch_control *bch, uint32_t *ecc,
 		for (i = 31; i >= 0; i--) {
 			uint32_t bit_mask = 0u - ((poly >> i) & 1u);
 
+#if LAC_USE_CT_BCH_SYNDROME_APOW
+			for (j = 0; j < 2*t; j += 2)
+				syn[j] ^= syndrome_a_pow_ct(bch,
+							    (j+1)*(i+s)) &
+					  bit_mask;
+#else
 			for (j = 0; j < 2*t; j += 2)
 				syn[j] ^= a_pow(bch, (j+1)*(i+s)) & bit_mask;
+#endif
 		}
 	} while (s > 0);
 

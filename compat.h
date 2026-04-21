@@ -48,6 +48,21 @@ typedef char lac_small_t;
 #define LAC_USE_CT_BCH 0
 #endif
 
+/* kem_dec_fo 是否启用 CT verify + conditional select */
+#ifndef LAC_USE_CT_KEM_DEC
+#define LAC_USE_CT_KEM_DEC 1
+#endif
+
+/* pke_dec 阈值恢复阶段是否启用 CT 掩码写法 */
+#ifndef LAC_USE_CT_PKE_DEC
+#define LAC_USE_CT_PKE_DEC 1
+#endif
+
+/* syndrome阶段是否用CT方式替代a_pow查表，便于A/B对比测试 */
+#ifndef LAC_USE_CT_BCH_SYNDROME_APOW
+#define LAC_USE_CT_BCH_SYNDROME_APOW 1
+#endif
+
 #if LAC_USE_CT_BCH
 #ifndef BCH_CONSTANT_TIME
 #define BCH_CONSTANT_TIME 1
