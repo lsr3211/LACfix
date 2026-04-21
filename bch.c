@@ -347,6 +347,55 @@ static void BCH_STD_UNUSED compute_syndromes(struct bch_control *bch,
 #if LAC_USE_CT_BCH
 static unsigned int ct_gf_sqr(struct bch_control *bch, unsigned int a);
 
+static void compute_syndromes_data_ecc_ct(struct bch_control *bch,
+					  const uint8_t *data,
+					  unsigned int len,
+					  const uint8_t *recv_ecc,
+					  unsigned int *syn)
+{
+	unsigned int byte_idx, bit_idx;
+	unsigned int data_bits = 8*len;
+	unsigned int ecc_bits = bch->ecc_bits;
+	unsigned int ecc_bytes = BCH_ECC_BYTES(bch);
+	const int t = GF_T(bch);
+
+	memset(syn, 0, 2*t*sizeof(*syn));
+
+	for (byte_idx = 0; byte_idx < len; byte_idx++) {
+		uint8_t byte = data[byte_idx];
+
+		for (bit_idx = 0; bit_idx < 8; bit_idx++) {
+			uint32_t bit_mask = 0u - ((byte >> bit_idx) & 1u);
+			unsigned int exp = ecc_bits + data_bits -
+				8*(byte_idx+1) + bit_idx;
+			int j;
+
+			for (j = 0; j < 2*t; j += 2)
+				syn[j] ^= a_pow(bch, (j+1)*exp) & bit_mask;
+		}
+	}
+
+	for (byte_idx = 0; byte_idx < ecc_bytes; byte_idx++) {
+		uint8_t byte = recv_ecc[byte_idx];
+
+		for (bit_idx = 0; bit_idx < 8; bit_idx++) {
+			unsigned int bit_off = 8*byte_idx + bit_idx;
+			if (bit_off < ecc_bits) {
+				uint32_t bit_mask = 0u -
+					((byte >> (7-bit_idx)) & 1u);
+				unsigned int exp = ecc_bits-1-bit_off;
+				int j;
+
+				for (j = 0; j < 2*t; j += 2)
+					syn[j] ^= a_pow(bch, (j+1)*exp) & bit_mask;
+			}
+		}
+	}
+
+	for (byte_idx = 0; byte_idx < (unsigned int)t; byte_idx++)
+		syn[2*byte_idx+1] = ct_gf_sqr(bch, syn[byte_idx]);
+}
+
 static void compute_syndromes_ct(struct bch_control *bch, uint32_t *ecc,
 				 unsigned int *syn)
 {
@@ -1229,7 +1278,14 @@ int decode_bch(struct bch_control *bch, const uint8_t *data, unsigned int len,
 			/* compute received data ecc into an internal buffer */
 			if (!data || !recv_ecc)
 				return -EINVAL;
+			#if LAC_USE_CT_BCH
+			compute_syndromes_data_ecc_ct(bch, data, len, recv_ecc,
+						      bch->syn);
+			syn = bch->syn;
+			goto have_syndromes;
+			#else
 			encode_bch(bch, data, len, NULL);
+			#endif
 		} else {
 			/* load provided calculated ecc */
 			load_ecc8(bch, bch->ecc_buf, calc_ecc);
@@ -1256,6 +1312,7 @@ int decode_bch(struct bch_control *bch, const uint8_t *data, unsigned int len,
 		syn = bch->syn;
 	}
 
+have_syndromes:
 	#if LAC_USE_CT_BCH
 	err = compute_error_locator_polynomial_ct(bch, syn);
 	nroots = chien_search_ct(bch, len, bch->elp, errloc);
