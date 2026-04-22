@@ -58,9 +58,24 @@ typedef char lac_small_t;
 #define LAC_USE_CT_PKE_DEC 1
 #endif
 
+/* 高优先级1：pseudo_random_bytes 尾块拷贝偏移修复 */
+#ifndef LAC_FIX_RAND_TAIL_COPY
+#define LAC_FIX_RAND_TAIL_COPY 1
+#endif
+
+/* 高优先级2：ecc_dec 纠错阶段是否使用固定迭代 + 掩码写法 */
+#ifndef LAC_USE_CT_ECC_CORRECT
+#define LAC_USE_CT_ECC_CORRECT 1
+#endif
+
+/* 高优先级4：pke_dec 中 c2-out 的模 q 还原是否使用 CT 减法约减 */
+#ifndef LAC_USE_CT_PKE_SUBMODQ
+#define LAC_USE_CT_PKE_SUBMODQ 1
+#endif
+
 /* syndrome阶段是否用CT方式替代a_pow查表，便于A/B对比测试 */
 #ifndef LAC_USE_CT_BCH_SYNDROME_APOW
-#define LAC_USE_CT_BCH_SYNDROME_APOW 1
+#define LAC_USE_CT_BCH_SYNDROME_APOW 0
 #endif
 
 #if LAC_USE_CT_BCH

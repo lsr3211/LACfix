@@ -19,6 +19,17 @@ static inline uint32_t enc_ct_mask_ge_u32(uint32_t a, uint32_t b)
 	return ~enc_ct_mask_lt_u32(a, b);
 }
 
+static inline int enc_sub_mod_q_u8(unsigned char x, unsigned char y)
+{
+#if LAC_USE_CT_PKE_SUBMODQ
+	int32_t d = (int32_t)x - (int32_t)y;
+	d += (d >> 31) & Q;
+	return (int)d;
+#else
+	return ((int)x - (int)y + Q) % Q;
+#endif
+}
+
 #ifdef LAC256
 static inline uint32_t enc_ct_select_u32(uint32_t mask, uint32_t x, uint32_t y)
 {
@@ -158,8 +169,8 @@ int pke_dec(const unsigned char *sk, const unsigned char *c,unsigned long long c
 	for(i=0;i<vec_bound;i++)
 	{
 		//D2 decoding:compute m*q/2+e1 + m*q/2+e2 in [0,2*Q]
-		temp1=(c2[i]-out[i]+Q)%Q;
-		temp2=(c2[i+vec_bound]-out[i+vec_bound]+Q)%Q;
+		temp1=enc_sub_mod_q_u8(c2[i], out[i]);
+		temp2=enc_sub_mod_q_u8(c2[i+vec_bound], out[i+vec_bound]);
 
 #if LAC_USE_CT_PKE_DEC
 		//shift
@@ -231,7 +242,7 @@ int pke_dec(const unsigned char *sk, const unsigned char *c,unsigned long long c
 	for(i=0;i<c2_len;i++)
 	{
 		//compute m*q/2+e in [0,Q]
-		temp=(c2[i]-out[i]+Q)%Q;
+		temp=enc_sub_mod_q_u8(c2[i], out[i]);
 		
 #if LAC_USE_CT_PKE_DEC
 		//recover m from m*q/2+e, RATIO=q/2

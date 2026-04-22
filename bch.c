@@ -443,7 +443,8 @@ static void compute_syndromes_ct(struct bch_control *bch, uint32_t *ecc,
 				syn[j] ^= syndrome_a_pow_ct(bch,
 							    (j+1)*(i+s)) &
 					  bit_mask;
-#else
+#else  
+//a_pow 这一步主要来自循环变量和当前 bit 位置，本身不是密钥表驱动的随机索引，所以不是高风险，且修改成syndrome_a_pow_ct后性能会变差，所以else这里还存有a_pow的写法
 			for (j = 0; j < 2*t; j += 2)
 				syn[j] ^= a_pow(bch, (j+1)*(i+s)) & bit_mask;
 #endif

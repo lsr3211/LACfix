@@ -1,6 +1,7 @@
 #include "bch.h"
 #include "ecc.h"
 #include "lac_param.h"
+#include "compat.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -37,6 +38,21 @@ struct gf_poly_deg1 {
 	struct gf_poly poly;
 	unsigned int   c[2];
 };
+
+static inline uint32_t ecc_ct_mask_nonzero_u32(uint32_t x)
+{
+	return 0u - ((x | (0u - x)) >> 31);
+}
+
+static inline uint32_t ecc_ct_mask_lt_u32(uint32_t a, uint32_t b)
+{
+	return 0u - ((a - b) >> 31);
+}
+
+static inline uint32_t ecc_ct_mask_eq_u32(uint32_t a, uint32_t b)
+{
+	return ~ecc_ct_mask_nonzero_u32(a ^ b);
+}
 //init
 int ecc_init()
 {
@@ -134,8 +150,32 @@ int ecc_dec(unsigned char *d, const unsigned char *c)
 	memcpy(ecc,c+DATA_LEN,ECC_LEN);
 	memset(ecc+ECC_LEN,0,ECCBUF_LEN-ECC_LEN);
 	//decode
+	memset(error_loc,0,sizeof(error_loc));
 	error_num=decode_bch(&ecc_bch,data_buf,DATA_LEN,ecc,NULL,NULL,error_loc);
 	//correct errors
+#if LAC_USE_CT_ECC_CORRECT
+	{
+		uint32_t positive_mask = 0u - (uint32_t)(error_num > 0);
+		uint32_t err_u = ((uint32_t)error_num) & positive_mask;
+
+		for (i=0;i<MAX_ERROR;i++)
+		{
+			unsigned int j;
+			uint32_t mask_i = ecc_ct_mask_lt_u32((uint32_t)i, err_u);
+			uint32_t loc = error_loc[i];
+			uint32_t mask_data = ecc_ct_mask_lt_u32(loc, (uint32_t)(DATA_LEN*8));
+			uint32_t mask_apply = mask_i & mask_data;
+			uint32_t byte_idx = loc >> 3;
+			unsigned char bit = (unsigned char)(1u << (loc & 7u));
+
+			for (j=0;j<DATA_LEN;j++)
+			{
+				uint32_t byte_mask = mask_apply & ecc_ct_mask_eq_u32(j, byte_idx);
+				data_buf[j] ^= (unsigned char)(bit & (unsigned char)byte_mask);
+			}
+		}
+	}
+#else
 	if(error_num>0)
     {
 		for (i=0;i<error_num;i++)
@@ -144,6 +184,7 @@ int ecc_dec(unsigned char *d, const unsigned char *c)
                 data_buf[(error_loc[i])/8] ^= (1 << ((error_loc[i]) % 8));
         }
     }
+#endif
 	//copy data to d
 	memcpy(d,data_buf,DATA_LEN);
 	//free memory

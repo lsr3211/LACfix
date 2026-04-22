@@ -1,6 +1,7 @@
 #include "rand.h"
 #include "rng.h"
 #include "lac_param.h"
+#include "compat.h"
 #include <string.h>
 #include <openssl/rand.h>
 #include <openssl/aes.h>
@@ -48,8 +49,12 @@ int pseudo_random_bytes(unsigned char *r, unsigned int len, const unsigned char 
 	{
 	//	*p=loop;
 		EVP_EncryptUpdate(ctx, c, &c_len, data, AES_BLOCK_SIZE);
+#if LAC_FIX_RAND_TAIL_COPY
+		memcpy(r + loop*AES_BLOCK_SIZE, c, len%AES_BLOCK_SIZE);
+#else
+		memcpy(r+loop-1,c,len%AES_BLOCK_SIZE);
+#endif
 	}
-	memcpy(r+loop-1,c,len%AES_BLOCK_SIZE);
 	EVP_CIPHER_CTX_free(ctx);
 	
 	return 0;
