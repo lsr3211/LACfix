@@ -45,7 +45,7 @@ typedef char lac_small_t;
 
 /* 是否启用bch中的恒定时间版实现 */
 #ifndef LAC_USE_CT_BCH
-#define LAC_USE_CT_BCH 0
+#define LAC_USE_CT_BCH 1
 #endif
 
 /* kem_dec_fo 是否启用 CT verify + conditional select */
@@ -73,9 +73,24 @@ typedef char lac_small_t;
 #define LAC_USE_CT_PKE_SUBMODQ 1
 #endif
 
+/* 高优先级5：gen_psi_fix_ham_ct compare-exchange 中是否使用严格掩码写法 */
+#ifndef LAC_USE_CT_PSI_CMPXCHG_STRICT
+#define LAC_USE_CT_PSI_CMPXCHG_STRICT 1
+#endif
+
 /* syndrome阶段是否用CT方式替代a_pow查表，便于A/B对比测试 */
 #ifndef LAC_USE_CT_BCH_SYNDROME_APOW
 #define LAC_USE_CT_BCH_SYNDROME_APOW 0
+#endif
+
+/* 高优先级3：当启用 CT-BCH 时，默认强制启用 CT syndrome a_pow 路径 */
+#ifndef LAC_FORCE_CT_BCH_SYNDROME_APOW_WHEN_CT_BCH
+#define LAC_FORCE_CT_BCH_SYNDROME_APOW_WHEN_CT_BCH 1
+#endif
+
+#if LAC_USE_CT_BCH && LAC_FORCE_CT_BCH_SYNDROME_APOW_WHEN_CT_BCH
+#undef LAC_USE_CT_BCH_SYNDROME_APOW
+#define LAC_USE_CT_BCH_SYNDROME_APOW 1
 #endif
 
 #if LAC_USE_CT_BCH

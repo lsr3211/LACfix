@@ -186,6 +186,11 @@ static inline uint32_t ct_mask_eq_u32(uint32_t a, uint32_t b)
     return (uint32_t)(0u - x);   /* equal -> 0xffffffff, else 0 */
 }
 
+static inline uint32_t ct_mask_nonzero_u32(uint32_t x)
+{
+    return (uint32_t)(0u - ((x | (0u - x)) >> 31));
+}
+
 /* a < b ? 0xffffffff : 0x00000000 */
 static inline uint32_t ct_mask_lt_u32(uint32_t a, uint32_t b)
 {
@@ -284,7 +289,12 @@ static inline void psi_item_compare_exchange(psi_item_t *a, psi_item_t *b, uint3
      * dir=0 降序：若 a < b，则交换
      */
     uint32_t swap_if_asc  = ~a_lt_b;   /* a !< b -> 可能等于或大于 */
+#if LAC_USE_CT_PSI_CMPXCHG_STRICT
+    uint32_t not_equal    = key_gt | key_lt |
+                            ct_mask_nonzero_u32((uint32_t)(idx_a ^ idx_b));
+#else
     uint32_t not_equal    = key_gt | key_lt | ((idx_a ^ idx_b) ? 0xffffffffu : 0u);
+#endif
     swap_if_asc &= not_equal;
 
     uint32_t swap_if_desc = a_lt_b;
