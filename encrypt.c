@@ -107,6 +107,9 @@ int kg_seed(unsigned char *pk, unsigned char *sk, unsigned char *seed)
 	poly_aff(a,(lac_small_t *)sk,e,pk+SEED_LEN,DIM_N);
 	//copy pk=as+e to the second part of sk, now sk=s|pk
 	memcpy(sk+DIM_N,pk,PK_LEN);
+	LAC_SECURE_CLEAR(seeds, sizeof(seeds));
+	LAC_SECURE_CLEAR(a, sizeof(a));
+	LAC_SECURE_CLEAR(e, sizeof(e));
 	return 0;
 }
 
@@ -119,7 +122,8 @@ int kg(unsigned char *pk, unsigned char *sk)
 	random_bytes(seed,SEED_LEN);		
 	//key generation with seed 
 	kg_seed(pk,sk,seed);	
-	
+	LAC_SECURE_CLEAR(seed, sizeof(seed));
+		
 	return 0;
 }
 // encryption
@@ -131,7 +135,8 @@ int pke_enc(const unsigned char *pk, const unsigned char *m, unsigned long long 
 	random_bytes(seed,SEED_LEN);
 	//encrypt with seed 
 	pke_enc_seed(pk,m,mlen,c,clen,seed);	
-
+	LAC_SECURE_CLEAR(seed, sizeof(seed));
+	
 	return 0;
 }
 // decrypt
@@ -217,10 +222,10 @@ int pke_dec(const unsigned char *sk, const unsigned char *c,unsigned long long c
 		}
 #endif
 	}
-	//bch decode to recover m
-	ecc_dec(m_buf,code);
-	//get plaintext
-	memcpy(m,m_buf+(DATA_LEN-(*mlen)),*mlen);
+		//bch decode to recover m
+		ecc_dec(m_buf,code);
+		//get plaintext
+		memcpy(m,m_buf+(DATA_LEN-(*mlen)),*mlen);
 	
 	#else
 	
@@ -263,12 +268,16 @@ int pke_dec(const unsigned char *sk, const unsigned char *c,unsigned long long c
 #endif
 	}
 	
-	//bch decode to recover m
-	ecc_dec(m_buf,code);
-	//get plaintext
-	memcpy(m,m_buf+(DATA_LEN-(*mlen)),*mlen);
-	#endif
-	
+		//bch decode to recover m
+		ecc_dec(m_buf,code);
+		//get plaintext
+		memcpy(m,m_buf+(DATA_LEN-(*mlen)),*mlen);
+		#endif
+	LAC_SECURE_CLEAR(out, sizeof(out));
+	LAC_SECURE_CLEAR(code, sizeof(code));
+	LAC_SECURE_CLEAR(c2, sizeof(c2));
+	LAC_SECURE_CLEAR(m_buf, sizeof(m_buf));
+		
 	return 0;
 }
 
@@ -350,7 +359,15 @@ int pke_enc_seed(const unsigned char *pk, const unsigned char *m, unsigned long 
 	//compress c2
 	poly_compress(c2,c+DIM_N,c2_len);
 	*clen=DIM_N+c2_len/2;
-
+	LAC_SECURE_CLEAR(code, sizeof(code));
+	LAC_SECURE_CLEAR(seeds, sizeof(seeds));
+	LAC_SECURE_CLEAR(r, sizeof(r));
+	LAC_SECURE_CLEAR(e1, sizeof(e1));
+	LAC_SECURE_CLEAR(e2, sizeof(e2));
+	LAC_SECURE_CLEAR(c2, sizeof(c2));
+	LAC_SECURE_CLEAR(a, sizeof(a));
+	LAC_SECURE_CLEAR(m_buf, sizeof(m_buf));
+	
 	return 0;
 
 }

@@ -1,5 +1,6 @@
 #include "api.h"
 #include "rand.h"
+#include "compat.h"
 #include <string.h>
 
 //Alice send: generate pk and sk, and send pk and cca kem ciphertext of pk_b to Bob
@@ -19,7 +20,9 @@ int crypto_ake_alice_send(unsigned char *pk,unsigned char *sk, unsigned char *pk
 	gen_seed(buf,CRYPTO_SECRETKEYBYTES+SEED_LEN,seed);
 	// call cca secure kem with seed to generate k1
 	kem_enc_fo_seed(pk_b,k1,c,seed);
-	
+	LAC_SECURE_CLEAR(seed, sizeof(seed));
+	LAC_SECURE_CLEAR(buf, sizeof(buf));
+		
 	return 0;
 }
 // Bob receive: receive  pk, randomly choose m, and encryrpt m with pk to generate c, k1. k=HASH(pk_a,pk_b,pk,c3,k1,k2,k3)
@@ -62,7 +65,13 @@ int crypto_ake_bob_receive(unsigned char *pk_b, unsigned char *sk_b, unsigned ch
 	memcpy(in+3*PK_LEN+CIPHER_LEN+2*MESSAGE_LEN,k3,MESSAGE_LEN);
 	// compute session key k=HASH(pk_a,pk_b,pk,c3,k1,k2,k3)
 	hash(in,3*MESSAGE_LEN+3*PK_LEN+CIPHER_LEN,k);
-	
+	LAC_SECURE_CLEAR(k1, sizeof(k1));
+	LAC_SECURE_CLEAR(k2, sizeof(k2));
+	LAC_SECURE_CLEAR(k3, sizeof(k3));
+	LAC_SECURE_CLEAR(in, sizeof(in));
+	LAC_SECURE_CLEAR(seed, sizeof(seed));
+	LAC_SECURE_CLEAR(buf, sizeof(buf));
+		
 	return 0;
 }
 //Alice receive: receive c, and decrypt to get k2, k3 and comute k=HASH(pk_a,pk_b,pk,c3,k1,k2,k3)
@@ -94,6 +103,9 @@ int crypto_ake_alice_receive(unsigned char *pk_a, unsigned char *sk_a, unsigned 
 	memcpy(in+3*PK_LEN+CIPHER_LEN+2*MESSAGE_LEN,k3,MESSAGE_LEN);
 	// compute session key k=HASH(pk_a,pk_b,pk,c3,k1,k2,k3)
 	hash(in,3*MESSAGE_LEN+3*PK_LEN+CIPHER_LEN,k);
-	
+	LAC_SECURE_CLEAR(k2, sizeof(k2));
+	LAC_SECURE_CLEAR(k3, sizeof(k3));
+	LAC_SECURE_CLEAR(in, sizeof(in));
+		
 	return 0;
 }

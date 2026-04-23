@@ -1,6 +1,8 @@
 #ifndef COMPAT_H
 #define COMPAT_H
 
+#include <stddef.h>
+
 #ifdef LAC_SIGNED_CHAR
 typedef signed char lac_small_t;
 #else
@@ -98,6 +100,27 @@ typedef char lac_small_t;
 #define BCH_CONSTANT_TIME 1
 #endif
 #endif
+
+/* 是否启用敏感中间值擦除 */
+#ifndef LAC_USE_SECURE_CLEAR
+#define LAC_USE_SECURE_CLEAR 1
+#endif
+
+static inline void lac_secure_clear_impl(void *ptr, size_t len)
+{
+#if LAC_USE_SECURE_CLEAR
+	volatile unsigned char *p = (volatile unsigned char *)ptr;
+
+	while (len--) {
+		*p++ = 0;
+	}
+#else
+	(void)ptr;
+	(void)len;
+#endif
+}
+
+#define LAC_SECURE_CLEAR(ptr, len) lac_secure_clear_impl((ptr), (len))
 
 #endif
 #endif

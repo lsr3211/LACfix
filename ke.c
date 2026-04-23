@@ -1,5 +1,6 @@
 #include "api.h"
 #include "rand.h"
+#include "compat.h"
 #include <string.h>
 
 //Alice send: generate pk and sk, and send pk to Bob
@@ -35,7 +36,9 @@ int crypto_ke_bob_receive(unsigned char *pk, unsigned char *c, unsigned char *k)
 	memcpy(in,pk,DIM_N+SEED_LEN);
 	memcpy(in+DIM_N,temp_key,MESSAGE_LEN);
 	hash(in,MESSAGE_LEN+DIM_N,k);
-	
+	LAC_SECURE_CLEAR(temp_key, sizeof(temp_key));
+	LAC_SECURE_CLEAR(in, sizeof(in));
+		
 	return 0;
 }
 //Alice receive: receive c, and decrypt to get m and comute k=HASH(pk,m)
@@ -56,6 +59,8 @@ int crypto_ke_alice_receive(unsigned char *pk, unsigned char *sk, unsigned char 
 	memcpy(in,pk,DIM_N+SEED_LEN);
 	memcpy(in+DIM_N,temp_key,MESSAGE_LEN);
 	hash(in,MESSAGE_LEN+DIM_N,k);
-	
+	LAC_SECURE_CLEAR(temp_key, sizeof(temp_key));
+	LAC_SECURE_CLEAR(in, sizeof(in));
+		
 	return 0;
 }

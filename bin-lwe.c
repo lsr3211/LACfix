@@ -41,7 +41,8 @@ int gen_a(unsigned char *a,  const unsigned char *seed)
 			}
 		}
 	}
-	
+	LAC_SECURE_CLEAR(buf, sizeof(buf));
+		
 	return 0;
 }
  
@@ -110,8 +111,8 @@ int gen_psi_fix_ham(lac_small_t *e, unsigned int vec_num, unsigned char *seed)
 
 	}
 	//set -1
-	for(i=bound1;i<bound2;i++)
-	{
+		for(i=bound1;i<bound2;i++)
+		{
 		while(e[p_index[i]&mask])
 		{
 			//refresh index
@@ -123,10 +124,12 @@ int gen_psi_fix_ham(lac_small_t *e, unsigned int vec_num, unsigned char *seed)
 				j=0;
 			}
 		}
-		e[p_index[i]&mask]=-1;
-	}
-	
-	return 0;
+			e[p_index[i]&mask]=-1;
+		}
+		LAC_SECURE_CLEAR(buf, sizeof(buf));
+		LAC_SECURE_CLEAR(r, sizeof(r));
+		
+		return 0;
 	#endif
 }
 
@@ -150,14 +153,15 @@ int gen_psi_std(lac_small_t *e, unsigned int vec_num, unsigned char *seed)
 	p1=r+vec_num/8;
 	p2=p1+vec_num/8;
 	p3=p2+vec_num/8;
-	for(i=0;i<vec_num;i++)
-	{
-		e_0=((r[i/8]>>(i%8))&1)-((p1[i/8]>>(i%8))&1);
-		e_1=((p2[i/8]>>(i%8))&1)-((p3[i/8]>>(i%8))&1);
-		e[i]=e_0*e_1;
-	}
-	
-	#else
+		for(i=0;i<vec_num;i++)
+		{
+			e_0=((r[i/8]>>(i%8))&1)-((p1[i/8]>>(i%8))&1);
+			e_1=((p2[i/8]>>(i%8))&1)-((p3[i/8]>>(i%8))&1);
+			e[i]=e_0*e_1;
+		}
+		LAC_SECURE_CLEAR(r, sizeof(r));
+		
+		#else
 	//Pr[e[i]=-1]=1/4,Pr[s[i]=0]=1/2,Pr[e[i]=1]=1/4,
 	unsigned char r[vec_num/4],*p;
 	
@@ -165,12 +169,13 @@ int gen_psi_std(lac_small_t *e, unsigned int vec_num, unsigned char *seed)
 	pseudo_random_bytes(r,vec_num/4,seed);
 	//COMPUTE e from r
 	p=r+vec_num/8;
-	for(i=0;i<vec_num;i++)
-	{
-		e[i]=((r[i/8]>>(i%8))&1)-((p[i/8]>>(i%8))&1);
-	}
-
-	#endif
+		for(i=0;i<vec_num;i++)
+		{
+			e[i]=((r[i/8]>>(i%8))&1)-((p[i/8]>>(i%8))&1);
+		}
+		LAC_SECURE_CLEAR(r, sizeof(r));
+	
+		#endif
 	
 	return 0;
 }
@@ -362,12 +367,13 @@ static int fill_random_keys(psi_item_t *items, unsigned int vec_num, unsigned ch
 
     pseudo_random_bytes(buf, 4 * vec_num, seed);
 
-    for (i = 0; i < vec_num; i++) {
-        items[i].key = load_u32_le(buf + 4 * i);
-        items[i].idx = (uint16_t)i;
-    }
+	    for (i = 0; i < vec_num; i++) {
+	        items[i].key = load_u32_le(buf + 4 * i);
+	        items[i].idx = (uint16_t)i;
+	    }
+	    LAC_SECURE_CLEAR(buf, sizeof(buf));
 
-    return 0;
+	    return 0;
 }
 
 /* 主函数：更标准的 CT 骨架 */
@@ -418,8 +424,8 @@ int gen_psi_fix_ham_ct(lac_small_t *e, unsigned int vec_num, unsigned char *seed
 	psi_bitonic_sort(items, vec_num);
 
     /* 3) 固定扫描写回，避免 e[items[k].idx] = ... 这种数据相关写地址 */
-    for (i = 0; i < vec_num; i++) {
-        int32_t val = 0;
+	    for (i = 0; i < vec_num; i++) {
+	        int32_t val = 0;
 
         /* 前 bound1 个为 +1 */
         for (k = 0; k < (unsigned int)bound1; k++) {
@@ -433,11 +439,12 @@ int gen_psi_fix_ham_ct(lac_small_t *e, unsigned int vec_num, unsigned char *seed
             val -= (int32_t)(m & 1u);
         }
 
-        e[i] = (lac_small_t)val;
-    }
+	        e[i] = (lac_small_t)val;
+	    }
+	    LAC_SECURE_CLEAR(items, sizeof(items));
 
-    return 0;
-}
+	    return 0;
+	}
 
 
 // poly_mul  b=as
@@ -587,30 +594,32 @@ static inline int32_t ct_cond_sub_q(int32_t x, int32_t q)
     return t + ((t >> 31) & q);
 }
 
-/* 需要根据 Q 选取 SHIFT 和 MU */
-#define BARRETT_SHIFT 24
-#define BARRETT_MU (((uint64_t)1 << BARRETT_SHIFT) / Q)
-
-static inline uint16_t mod_q_barrett_ct_u32(uint32_t x)
+/*
+ * 对当前 CT 标量路径，输入满足：
+ *   x = gather1 - gather0 + BIG_Q (+ e[i])
+ * 其中 |gather1-gather0| < DIM_N * Q，且 BIG_Q = 1024 * Q。
+ * 在当前参数集 (DIM_N <= 1024) 下，恒有 x < 2048 * Q。
+ *
+ * 因此可用固定 12 轮的“按 2^k * Q 条件减法”完成约减。
+ * 这里每轮都执行相同指令序列，不依赖秘密分支，也不需要
+ * 额外证明 Barrett 近似商的误差界。
+ */
+static inline uint32_t ct_mask_ge_u32(uint32_t a, uint32_t b)
 {
-    uint32_t qhat;
-    uint32_t r;
+    return ~ct_mask_lt_u32(a, b);
+}
 
-    /* 近似商 */
-    qhat = (uint32_t)(((uint64_t)x * (uint64_t)BARRETT_MU) >> BARRETT_SHIFT);
+static inline uint16_t mod_q_ct_bounded_u32(uint32_t x)
+{
+    unsigned int k;
 
-    /* 初步余数 */
-    r = x - qhat * Q;
+    for (k = 12; k-- > 0;) {
+        uint32_t qk = ((uint32_t)Q) << k;
+        uint32_t mask = ct_mask_ge_u32(x, qk);
+        x -= qk & mask;
+    }
 
-    /*
-     * 固定次数修正
-     * 如果参数取得合适，通常做 2~3 次条件减法就够
-     */
-    r = (uint32_t)ct_cond_sub_q((int32_t)r, Q);
-    r = (uint32_t)ct_cond_sub_q((int32_t)r, Q);
-    r = (uint32_t)ct_cond_sub_q((int32_t)r, Q);
-
-    return (uint16_t)r;
+    return (uint16_t)x;
 }
 
 static inline int32_t ct_cond_add_q(int32_t x, int32_t q)
@@ -670,7 +679,7 @@ static int poly_mul_scalar_ct(const unsigned char *a, const lac_small_t *s,
 		uint32_t x = (uint32_t)(gather1 - gather0 + BIG_Q);
 		
 		//b[i]=(gather1-gather0+BIG_Q)%Q;
-        b[i] = (unsigned char)mod_q_barrett_ct_u32(x);
+        b[i] = (unsigned char)mod_q_ct_bounded_u32(x);
 
        
     }
@@ -755,7 +764,7 @@ static int poly_aff_scalar_ct(const unsigned char *a, const lac_small_t *s,
    
         uint32_t x = (uint32_t)(gather1 - gather0 + (int32_t)e[i] + BIG_Q);
 		//b[i]=(gather1-gather0+e[i]+BIG_Q)%Q;
-        b[i] = (unsigned char)mod_q_barrett_ct_u32(x);
+        b[i] = (unsigned char)mod_q_ct_bounded_u32(x);
     }
 
     return 0;

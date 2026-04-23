@@ -60,7 +60,9 @@ int kem_enc_fo(const unsigned char *pk, unsigned char *k, unsigned char *c)
 	//compute k=hash(m|c)
 	memcpy(buf+MESSAGE_LEN,c,CIPHER_LEN);
 	hash(buf,MESSAGE_LEN+CIPHER_LEN,k);
-	
+	LAC_SECURE_CLEAR(buf, sizeof(buf));
+	LAC_SECURE_CLEAR(seed, sizeof(seed));
+		
 	return 0;
 }
 
@@ -87,7 +89,9 @@ int kem_enc_fo_seed(const unsigned char *pk, unsigned char *k, unsigned char *c,
 	//compute k=hash(m|c)
 	memcpy(buf+MESSAGE_LEN,c,CIPHER_LEN);
 	hash(buf,MESSAGE_LEN+CIPHER_LEN,k);
-	
+	LAC_SECURE_CLEAR(buf, sizeof(buf));
+	LAC_SECURE_CLEAR(local_seed, sizeof(local_seed));
+		
 	return 0;
 }
 
@@ -127,10 +131,16 @@ int kem_dec_fo(const unsigned char *pk, const unsigned char *sk, const unsigned 
 	memcpy(fallback_in+MESSAGE_LEN,c,CIPHER_LEN);
 	hash(fallback_in,MESSAGE_LEN+CIPHER_LEN,k_bad);
 
-	match_mask = ct_mask_zero_u32(diff);
-	for (i = 0; i < MESSAGE_LEN; i++)
-		k[i] = ct_select_u8(match_mask, k_good[i], k_bad[i]);
-#else
+		match_mask = ct_mask_zero_u32(diff);
+		for (i = 0; i < MESSAGE_LEN; i++)
+			k[i] = ct_select_u8(match_mask, k_good[i], k_bad[i]);
+		LAC_SECURE_CLEAR(buf, sizeof(buf));
+		LAC_SECURE_CLEAR(seed, sizeof(seed));
+		LAC_SECURE_CLEAR(c_v, sizeof(c_v));
+		LAC_SECURE_CLEAR(k_good, sizeof(k_good));
+		LAC_SECURE_CLEAR(k_bad, sizeof(k_bad));
+		LAC_SECURE_CLEAR(fallback_in, sizeof(fallback_in));
+	#else
 	unsigned char buf[MESSAGE_LEN+CIPHER_LEN],seed[SEED_LEN];
 	unsigned char c_v[CIPHER_LEN];
 	unsigned long long mlen,clen;
@@ -145,13 +155,16 @@ int kem_dec_fo(const unsigned char *pk, const unsigned char *sk, const unsigned 
 	pke_enc_seed(pk,buf,MESSAGE_LEN,c_v,&clen,seed);
 
 	//verify
-	if(memcmp(c,c_v,CIPHER_LEN)!=0)
-	{
-		//k=hash(hash(sk)|c)
-		hash((unsigned char*)sk,DIM_N,buf);
-		hash(buf,MESSAGE_LEN+CIPHER_LEN,k);
-	}
-#endif
+		if(memcmp(c,c_v,CIPHER_LEN)!=0)
+		{
+			//k=hash(hash(sk)|c)
+			hash((unsigned char*)sk,DIM_N,buf);
+			hash(buf,MESSAGE_LEN+CIPHER_LEN,k);
+		}
+		LAC_SECURE_CLEAR(buf, sizeof(buf));
+		LAC_SECURE_CLEAR(seed, sizeof(seed));
+		LAC_SECURE_CLEAR(c_v, sizeof(c_v));
+	#endif
 
 	return 0;
 }

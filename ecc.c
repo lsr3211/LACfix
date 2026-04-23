@@ -39,6 +39,9 @@ struct gf_poly_deg1 {
 	unsigned int   c[2];
 };
 
+int ecc_init(void);
+int ecc_free(void);
+
 static inline uint32_t ecc_ct_mask_nonzero_u32(uint32_t x)
 {
 	return 0u - ((x | (0u - x)) >> 31);
@@ -52,6 +55,20 @@ static inline uint32_t ecc_ct_mask_lt_u32(uint32_t a, uint32_t b)
 static inline uint32_t ecc_ct_mask_eq_u32(uint32_t a, uint32_t b)
 {
 	return ~ecc_ct_mask_nonzero_u32(a ^ b);
+}
+
+static int ecc_workspace_ready = 0;
+
+static int ecc_prepare_workspace(void)
+{
+	if (ecc_workspace_ready)
+		return 0;
+
+	if (ecc_init() != 0)
+		return -1;
+
+	ecc_workspace_ready = 1;
+	return 0;
 }
 //init
 int ecc_init()
@@ -111,9 +128,12 @@ int ecc_enc(const unsigned char *d, unsigned char *c)
 {
 	unsigned char ecc[ECCBUF_LEN];
 	unsigned char data_buf[DATABUF_LEN];
-	
+		
 	//ecc init
-	ecc_init();
+	if (ecc_prepare_workspace() != 0)
+	{
+		return -1;
+	}
 	//init ecc to be 0 as requited by encode_bch function
 	memset(ecc,0,ECCBUF_LEN);
 	//clear data_buf and copy data to data_buf
@@ -125,9 +145,9 @@ int ecc_enc(const unsigned char *d, unsigned char *c)
 	memcpy(c,d,DATA_LEN);
 	// compy ecc to the second part of code
 	memcpy(c+DATA_LEN,ecc,ECC_LEN);
-	//free memory
-	ecc_free();
-	
+	LAC_SECURE_CLEAR(ecc, sizeof(ecc));
+	LAC_SECURE_CLEAR(data_buf, sizeof(data_buf));
+		
 	return 0;
 }
 
@@ -138,13 +158,16 @@ int ecc_dec(unsigned char *d, const unsigned char *c)
 	#ifndef TEST_ROW_ERROR_RATE
 	int error_num=-1;
 	unsigned char ecc[ECCBUF_LEN];
-	unsigned char data_buf[DATABUF_LEN];
-	int i;
-	unsigned int error_loc[MAX_ERROR];
-	//init
-	ecc_init();
-	//clear data_buf and copy data to data_buf
-	memset(data_buf,0,DATABUF_LEN);
+		unsigned char data_buf[DATABUF_LEN];
+		int i;
+		unsigned int error_loc[MAX_ERROR];
+		//init
+		if (ecc_prepare_workspace() != 0)
+		{
+			return -1;
+		}
+		//clear data_buf and copy data to data_buf
+		memset(data_buf,0,DATABUF_LEN);
 	memcpy(data_buf,c,DATA_LEN);
 	//compy correction code to ecc
 	memcpy(ecc,c+DATA_LEN,ECC_LEN);
@@ -184,13 +207,14 @@ int ecc_dec(unsigned char *d, const unsigned char *c)
                 data_buf[(error_loc[i])/8] ^= (1 << ((error_loc[i]) % 8));
         }
     }
-#endif
-	//copy data to d
-	memcpy(d,data_buf,DATA_LEN);
-	//free memory
-	ecc_free();
-	
-	#else
+		#endif
+		//copy data to d
+		memcpy(d,data_buf,DATA_LEN);
+		LAC_SECURE_CLEAR(ecc, sizeof(ecc));
+		LAC_SECURE_CLEAR(data_buf, sizeof(data_buf));
+		LAC_SECURE_CLEAR(error_loc, sizeof(error_loc));
+		
+		#else
 	int error_num=-1;
 	//copy data to d
 	memcpy(d,c,DATA_LEN);

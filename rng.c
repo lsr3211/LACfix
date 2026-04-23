@@ -7,6 +7,7 @@
 
 #include <string.h>
 #include "rng.h"
+#include "compat.h"
 #include <openssl/conf.h>
 #include <openssl/evp.h>
 #include <openssl/err.h>
@@ -150,6 +151,7 @@ randombytes_init(unsigned char *entropy_input,
     memset(DRBG_ctx.V, 0x00, 16);
     AES256_CTR_DRBG_Update(seed_material, DRBG_ctx.Key, DRBG_ctx.V);
     DRBG_ctx.reseed_counter = 1;
+    LAC_SECURE_CLEAR(seed_material, sizeof(seed_material));
 }
 
 int
@@ -181,6 +183,7 @@ randombytes(unsigned char *x, unsigned long long xlen)
     }
     AES256_CTR_DRBG_Update(NULL, DRBG_ctx.Key, DRBG_ctx.V);
     DRBG_ctx.reseed_counter++;
+    LAC_SECURE_CLEAR(block, sizeof(block));
     
     return RNG_SUCCESS;
 }
@@ -210,8 +213,8 @@ AES256_CTR_DRBG_Update(unsigned char *provided_data,
             temp[i] ^= provided_data[i];
     memcpy(Key, temp, 32);
     memcpy(V, temp+32, 16);
+    LAC_SECURE_CLEAR(temp, sizeof(temp));
 }
-
 
 
 

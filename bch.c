@@ -485,6 +485,11 @@ static inline uint32_t ct_select_u32(uint32_t mask, uint32_t x, uint32_t y)
 	return (mask & x) | (~mask & y);
 }
 
+static inline int ct_select_int(uint32_t mask, int x, int y)
+{
+	return (int)ct_select_u32(mask, (uint32_t)x, (uint32_t)y);
+}
+
 static unsigned int ct_gf_mul(struct bch_control *bch, unsigned int a,
 			      unsigned int b)
 {
@@ -1345,18 +1350,17 @@ have_syndromes:
 	#if LAC_USE_CT_BCH
 	err = compute_error_locator_polynomial_ct(bch, syn);
 	nroots = chien_search_ct(bch, len, bch->elp, errloc);
-	{
-		uint32_t mask_err_pos = 0u - (uint32_t)(err > 0);
-		uint32_t mask_err_zero = 0u - (uint32_t)(err == 0);
-		uint32_t fail = 0;
+		{
+			uint32_t mask_err_pos = 0u - (uint32_t)(err > 0);
+			uint32_t mask_err_zero = 0u - (uint32_t)(err == 0);
+			uint32_t fail = 0;
 
-		fail |= mask_err_pos &
-			ct_mask_nonzero_u32((uint32_t)err ^ (uint32_t)nroots);
-		fail |= mask_err_zero & ct_mask_nonzero_u32((uint32_t)nroots);
-		fail |= 0u - (uint32_t)(err < 0);
-		if (fail)
-			err = -1;
-	}
+			fail |= mask_err_pos &
+				ct_mask_nonzero_u32((uint32_t)err ^ (uint32_t)nroots);
+			fail |= mask_err_zero & ct_mask_nonzero_u32((uint32_t)nroots);
+			fail |= 0u - (uint32_t)(err < 0);
+			err = ct_select_int(ct_mask_nonzero_u32(fail), -1, err);
+		}
 	#else
 	err = compute_error_locator_polynomial(bch, syn);
 	if (err > 0) {
@@ -1373,20 +1377,19 @@ have_syndromes:
 		uint32_t mask_err_pos = 0u - (uint32_t)(err > 0);
 		unsigned int err_u = (unsigned int)err;
 
-		for (i = 0; i < (int)bch->t; i++) {
-			uint32_t mask_valid = mask_err_pos &
-				ct_mask_lt_u32((unsigned int)i, err_u);
-			uint32_t mask_in_range = ct_mask_lt_u32(errloc[i], nbits);
-			unsigned int loc = nbits-1-errloc[i];
+			for (i = 0; i < (int)bch->t; i++) {
+				uint32_t mask_valid = mask_err_pos &
+					ct_mask_lt_u32((unsigned int)i, err_u);
+				uint32_t mask_in_range = ct_mask_lt_u32(errloc[i], nbits);
+				unsigned int loc = nbits-1-errloc[i];
 
 			loc = (loc & ~7)|(7-(loc & 7));
-			errloc[i] = ct_select_u32(mask_valid, loc, errloc[i]);
-			invalid |= mask_valid & ~mask_in_range;
+				errloc[i] = ct_select_u32(mask_valid, loc, errloc[i]);
+				invalid |= mask_valid & ~mask_in_range;
+			}
+			err = ct_select_int(ct_mask_nonzero_u32(invalid), -1, err);
 		}
-		if (invalid)
-			err = -1;
-	}
-	#else
+		#else
 	if (err > 0) {
 		for (i = 0; i < err; i++) {
 			if (errloc[i] >= nbits) {
@@ -1398,7 +1401,10 @@ have_syndromes:
 		}
 	}
 	#endif
-	return (err >= 0) ? err : -EBADMSG;
+	{
+		uint32_t ok_mask = ~((uint32_t)err >> 31);
+		return ct_select_int(ok_mask, err, -EBADMSG);
+	}
 }
 EXPORT_SYMBOL_GPL(decode_bch);
 

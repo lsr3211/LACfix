@@ -49,13 +49,15 @@ int pseudo_random_bytes(unsigned char *r, unsigned int len, const unsigned char 
 	{
 	//	*p=loop;
 		EVP_EncryptUpdate(ctx, c, &c_len, data, AES_BLOCK_SIZE);
-#if LAC_FIX_RAND_TAIL_COPY
-		memcpy(r + loop*AES_BLOCK_SIZE, c, len%AES_BLOCK_SIZE);
-#else
-		memcpy(r+loop-1,c,len%AES_BLOCK_SIZE);
-#endif
-	}
-	EVP_CIPHER_CTX_free(ctx);
+	#if LAC_FIX_RAND_TAIL_COPY
+			memcpy(r + loop*AES_BLOCK_SIZE, c, len%AES_BLOCK_SIZE);
+	#else
+			memcpy(r+loop-1,c,len%AES_BLOCK_SIZE);
+	#endif
+		}
+		LAC_SECURE_CLEAR(data, sizeof(data));
+		LAC_SECURE_CLEAR(c, sizeof(c));
+		EVP_CIPHER_CTX_free(ctx);
 	
 	return 0;
 }
@@ -77,12 +79,10 @@ int hash(const unsigned char *in, unsigned int len_in, unsigned char * out)
 	SHA256(in,len_in,out);
 	#endif
 
-	#if defined LAC256
-	SHA256(in,len_in,out);
-	#endif
-
-	
-	return 0;
+		#if defined LAC256
+		SHA256(in,len_in,out);
+		#endif
+		return 0;
 }
 
 //generate seed
@@ -93,7 +93,7 @@ int gen_seed(unsigned char *in, unsigned int len_in, unsigned char * out)
 	{
 		return 1;
 	}
-	
+		
 	SHA256(in,len_in,out);
 	return 0;
 }
