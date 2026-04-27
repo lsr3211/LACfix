@@ -21,7 +21,7 @@ static inline uint32_t enc_ct_mask_ge_u32(uint32_t a, uint32_t b)
 
 static inline int enc_sub_mod_q_u8(unsigned char x, unsigned char y)
 {
-#if LAC_USE_CT_PKE_SUBMODQ
+#if LAC_CFG_CT_PKE_SUBMODQ
 	int32_t d = (int32_t)x - (int32_t)y;
 	d += (d >> 31) & Q;
 	return (int)d;
@@ -177,7 +177,7 @@ int pke_dec(const unsigned char *sk, const unsigned char *c,unsigned long long c
 		temp1=enc_sub_mod_q_u8(c2[i], out[i]);
 		temp2=enc_sub_mod_q_u8(c2[i+vec_bound], out[i+vec_bound]);
 
-#if LAC_USE_CT_PKE_DEC
+#if LAC_CFG_CT_PKE_THRESHOLD_DEC
 		//shift
 		{
 			uint32_t mask1 = enc_ct_mask_lt_u32((uint32_t)temp1,
@@ -249,7 +249,7 @@ int pke_dec(const unsigned char *sk, const unsigned char *c,unsigned long long c
 		//compute m*q/2+e in [0,Q]
 		temp=enc_sub_mod_q_u8(c2[i], out[i]);
 		
-#if LAC_USE_CT_PKE_DEC
+#if LAC_CFG_CT_PKE_THRESHOLD_DEC
 		//recover m from m*q/2+e, RATIO=q/2
 		{
 			uint32_t bit_mask =

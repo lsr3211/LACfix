@@ -39,3 +39,9 @@ int ecc_enc(const unsigned char *d, unsigned char *c);
 //error corrction decode
 int ecc_dec(unsigned char *d, const unsigned char *c);
 
+//init ecc workspace
+int ecc_init(void);
+
+//free ecc workspace
+int ecc_free(void);
+

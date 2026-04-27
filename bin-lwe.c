@@ -10,10 +10,6 @@
 
 
 
-#if LAC_USE_NEON_IMPL
-#include <arm_neon.h>
-#endif
-
 //generate the public parameter a from seed
 int gen_a(unsigned char *a,  const unsigned char *seed)
 {
@@ -49,7 +45,7 @@ int gen_a(unsigned char *a,  const unsigned char *seed)
 //generate the small random vector for secret and error, with fixed hamming weight
 int gen_psi_fix_ham(lac_small_t *e, unsigned int vec_num, unsigned char *seed)
 {
-	#if LAC_USE_CT_PSI_FIX_HAM
+	#if LAC_CFG_CT_BINLWE_PSI_FIXED
     return gen_psi_fix_ham_ct(e, vec_num, seed);
 	#else
 	if(e==NULL)
@@ -294,7 +290,7 @@ static inline void psi_item_compare_exchange(psi_item_t *a, psi_item_t *b, uint3
      * dir=0 降序：若 a < b，则交换
      */
     uint32_t swap_if_asc  = ~a_lt_b;   /* a !< b -> 可能等于或大于 */
-#if LAC_USE_CT_PSI_CMPXCHG_STRICT
+#if LAC_CFG_CT_BINLWE_PSI_STRICT_CMPXCHG
     uint32_t not_equal    = key_gt | key_lt |
                             ct_mask_nonzero_u32((uint32_t)(idx_a ^ idx_b));
 #else
@@ -448,7 +444,7 @@ int gen_psi_fix_ham_ct(lac_small_t *e, unsigned int vec_num, unsigned char *seed
 
 
 // poly_mul  b=as
-#if !LAC_USE_CT_SCALAR
+#if !LAC_CFG_CT_BINLWE_SCALAR_MUL
 static int poly_mul_scalar_orig(const unsigned char *a, const lac_small_t *s, unsigned char *b, unsigned int vec_num)
 {
 	int i,j;
@@ -575,7 +571,7 @@ static int poly_aff_scalar_orig(const unsigned char *a, const lac_small_t *s, la
 #endif
 
 //恒定时间版（未进行SIMD化）
-#if LAC_USE_CT_SCALAR
+#if LAC_CFG_CT_BINLWE_SCALAR_MUL
 /* 恒定时间辅助函数 */
 static inline uint16_t ct_mask_eq_i16(int16_t x, int16_t y)
 {
@@ -774,175 +770,21 @@ static int poly_aff_scalar_ct(const unsigned char *a, const lac_small_t *s,
 
 int poly_mul(const unsigned char *a, const lac_small_t *s, unsigned char *b, unsigned int vec_num)
 {
-#if LAC_USE_NEON_IMPL
-    return poly_mul_neon(a, s, b, vec_num);
-#else
-#if LAC_USE_CT_SCALAR
+#if LAC_CFG_CT_BINLWE_SCALAR_MUL
     return poly_mul_scalar_ct(a, s, b, vec_num);
 #else
     return poly_mul_scalar_orig(a, s, b, vec_num);
-#endif
 #endif
 }
 
 int poly_aff(const unsigned char *a, const lac_small_t *s, lac_small_t *e, unsigned char *b, unsigned int vec_num)
 {
-#if LAC_USE_NEON_IMPL
-    return poly_aff_neon(a, s, e, b, vec_num);
-#else
-#if LAC_USE_CT_SCALAR
+#if LAC_CFG_CT_BINLWE_SCALAR_MUL
     return poly_aff_scalar_ct(a, s, e, b, vec_num);
 #else
     return poly_aff_scalar_orig(a, s, e, b, vec_num);
 #endif
-#endif
 }
-
-
-
-
-
-
-
-//NEON版
-#if LAC_USE_NEON_IMPL
-//向量横向求和
-static inline uint32_t hsum_u32x4(uint32x4_t x)
-{
-    return vaddvq_u32(x);
-}
-
-static int poly_mul_neon(const unsigned char *a, const lac_small_t *s, unsigned char *b, unsigned int vec_num)
-{
-    int i, j;
-    int16_t v[DIM_N + DIM_N];
-    uint16_t s0[DIM_N], s1[DIM_N];
-
-    if (a == NULL || s == NULL || b == NULL) {
-        return 1;
-    }
-
-    /* 1. 保留原始预处理：构造 v / s0 / s1 */
-    memset(s0, 0, sizeof(s0));
-    memset(s1, 0, sizeof(s1));
-
-    for (i = 0; i < DIM_N; i++) {
-        v[i] = a[DIM_N - 1 - i];
-        v[i + DIM_N] = Q - v[i];
-
-        if (s[i] == -1) s0[i] = 0xffff;
-        if (s[i] ==  1) s1[i] = 0xffff;
-    }
-
-    /* 2. 外层仍然逐个生成 b[i] */
-    for (i = 0; i < (int)vec_num; i++) {
-        const uint16_t *vp  = (const uint16_t *)(v + DIM_N - i - 1);
-        const uint16_t *m0p = (const uint16_t *)s0;
-        const uint16_t *m1p = (const uint16_t *)s1;
-
-        uint32x4_t acc0_lo = vdupq_n_u32(0);
-        uint32x4_t acc0_hi = vdupq_n_u32(0);
-        uint32x4_t acc1_lo = vdupq_n_u32(0);
-        uint32x4_t acc1_hi = vdupq_n_u32(0);
-
-        /* 3. 内层按 32 个系数一组，和原代码步调保持一致 */
-        for (j = 0; j < DIM_N; j += 32) {
-            int blk;
-            for (blk = 0; blk < 4; blk++) {
-                /* 每次加载 8 个 16-bit lane */
-                uint16x8_t vv  = vld1q_u16(vp);   vp  += 8;
-                uint16x8_t mm0 = vld1q_u16(m0p);  m0p += 8;
-                uint16x8_t mm1 = vld1q_u16(m1p);  m1p += 8;
-
-                /* 对应原始代码里的 (&) 掩码筛选 */
-                uint16x8_t t0 = vandq_u16(vv, mm0);
-                uint16x8_t t1 = vandq_u16(vv, mm1);
-
-                /* 扩位到 32-bit 后累加 */
-                acc0_lo = vaddq_u32(acc0_lo, vmovl_u16(vget_low_u16(t0)));
-                acc0_hi = vaddq_u32(acc0_hi, vmovl_u16(vget_high_u16(t0)));
-                acc1_lo = vaddq_u32(acc1_lo, vmovl_u16(vget_low_u16(t1)));
-                acc1_hi = vaddq_u32(acc1_hi, vmovl_u16(vget_high_u16(t1)));
-            }
-        }
-
-        /* 4. 横向归约，对应原代码最后的 gather0/gather1 */
-        {
-            uint32x4_t sum0 = vaddq_u32(acc0_lo, acc0_hi);
-            uint32x4_t sum1 = vaddq_u32(acc1_lo, acc1_hi);
-
-            uint32_t gather0 = hsum_u32x4(sum0);
-            uint32_t gather1 = hsum_u32x4(sum1);
-
-            b[i] = (gather1 - gather0 + BIG_Q) % Q;
-        }
-    }
-
-    return 0;
-}
-
-static int poly_aff_neon(const unsigned char *a, const lac_small_t *s, lac_small_t *e, unsigned char *b, unsigned int vec_num)
-{
-    int i, j;
-    int16_t v[DIM_N + DIM_N];
-    uint16_t s0[DIM_N], s1[DIM_N];
-
-    if (a == NULL || s == NULL || e == NULL || b == NULL) {
-        return 1;
-    }
-
-    memset(s0, 0, sizeof(s0));
-    memset(s1, 0, sizeof(s1));
-
-    for (i = 0; i < DIM_N; i++) {
-        v[i] = a[DIM_N - 1 - i];
-        v[i + DIM_N] = Q - v[i];
-
-        if (s[i] == -1) s0[i] = 0xffff;
-        if (s[i] ==  1) s1[i] = 0xffff;
-    }
-
-    for (i = 0; i < (int)vec_num; i++) {
-        const uint16_t *vp  = (const uint16_t *)(v + DIM_N - i - 1);
-        const uint16_t *m0p = (const uint16_t *)s0;
-        const uint16_t *m1p = (const uint16_t *)s1;
-
-        uint32x4_t acc0_lo = vdupq_n_u32(0);
-        uint32x4_t acc0_hi = vdupq_n_u32(0);
-        uint32x4_t acc1_lo = vdupq_n_u32(0);
-        uint32x4_t acc1_hi = vdupq_n_u32(0);
-
-        for (j = 0; j < DIM_N; j += 32) {
-            int blk;
-            for (blk = 0; blk < 4; blk++) {
-                uint16x8_t vv  = vld1q_u16(vp);   vp  += 8;
-                uint16x8_t mm0 = vld1q_u16(m0p);  m0p += 8;
-                uint16x8_t mm1 = vld1q_u16(m1p);  m1p += 8;
-
-                uint16x8_t t0 = vandq_u16(vv, mm0);
-                uint16x8_t t1 = vandq_u16(vv, mm1);
-
-                acc0_lo = vaddq_u32(acc0_lo, vmovl_u16(vget_low_u16(t0)));
-                acc0_hi = vaddq_u32(acc0_hi, vmovl_u16(vget_high_u16(t0)));
-                acc1_lo = vaddq_u32(acc1_lo, vmovl_u16(vget_low_u16(t1)));
-                acc1_hi = vaddq_u32(acc1_hi, vmovl_u16(vget_high_u16(t1)));
-            }
-        }
-
-        {
-            uint32x4_t sum0 = vaddq_u32(acc0_lo, acc0_hi);
-            uint32x4_t sum1 = vaddq_u32(acc1_lo, acc1_hi);
-
-            uint32_t gather0 = hsum_u32x4(sum0);
-            uint32_t gather1 = hsum_u32x4(sum1);
-
-            b[i] = (gather1 - gather0 + e[i] + BIG_Q) % Q;
-        }
-    }
-
-    return 0;
-}
-#endif
 
 // compress: cut the low 4bit
 int poly_compress(const unsigned char *in,  unsigned char *out, const unsigned int vec_num)

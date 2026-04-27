@@ -39,9 +39,6 @@ struct gf_poly_deg1 {
 	unsigned int   c[2];
 };
 
-int ecc_init(void);
-int ecc_free(void);
-
 static inline uint32_t ecc_ct_mask_nonzero_u32(uint32_t x)
 {
 	return 0u - ((x | (0u - x)) >> 31);
@@ -58,22 +55,15 @@ static inline uint32_t ecc_ct_mask_eq_u32(uint32_t a, uint32_t b)
 }
 
 static int ecc_workspace_ready = 0;
-
-static int ecc_prepare_workspace(void)
-{
-	if (ecc_workspace_ready)
-		return 0;
-
-	if (ecc_init() != 0)
-		return -1;
-
-	ecc_workspace_ready = 1;
-	return 0;
-}
 //init
 int ecc_init()
 {
 	int i;
+
+	if (ecc_workspace_ready)
+	{
+		return 0;
+	}
 	//init the bch encoder
 	ecc_bch.elp= malloc((ecc_bch.t+1)*sizeof(struct gf_poly_deg1));
 	if(ecc_bch.elp==NULL)
@@ -96,7 +86,8 @@ int ecc_init()
 			memset(ecc_bch.poly_2t[i],0,GF_POLY_SZ(2*ecc_bch.t));
 		}
 	}
-	
+
+	ecc_workspace_ready = 1;
 	return 0;
 }
 
@@ -119,7 +110,8 @@ int ecc_free()
 			ecc_bch.poly_2t[i]=NULL;
 		}
 	}
-	
+
+	ecc_workspace_ready = 0;
 	return 0;
 }
 
@@ -128,12 +120,17 @@ int ecc_enc(const unsigned char *d, unsigned char *c)
 {
 	unsigned char ecc[ECCBUF_LEN];
 	unsigned char data_buf[DATABUF_LEN];
-		
-	//ecc init
+
+	/*
+	 * 旧实现：在热路径里做懒初始化。
+	 * 现在改为程序启动阶段在 main() 中显式调用 ecc_init()。
+	 */
+	/*
 	if (ecc_prepare_workspace() != 0)
 	{
 		return -1;
 	}
+	*/
 	//init ecc to be 0 as requited by encode_bch function
 	memset(ecc,0,ECCBUF_LEN);
 	//clear data_buf and copy data to data_buf
@@ -157,17 +154,22 @@ int ecc_dec(unsigned char *d, const unsigned char *c)
 	//test error without error correction 
 	#ifndef TEST_ROW_ERROR_RATE
 	int error_num=-1;
-	unsigned char ecc[ECCBUF_LEN];
-		unsigned char data_buf[DATABUF_LEN];
-		int i;
-		unsigned int error_loc[MAX_ERROR];
-		//init
-		if (ecc_prepare_workspace() != 0)
-		{
-			return -1;
-		}
-		//clear data_buf and copy data to data_buf
-		memset(data_buf,0,DATABUF_LEN);
+		unsigned char ecc[ECCBUF_LEN];
+			unsigned char data_buf[DATABUF_LEN];
+			int i;
+			unsigned int error_loc[MAX_ERROR];
+			/*
+			 * 旧实现：在热路径里做懒初始化。
+			 * 现在改为程序启动阶段在 main() 中显式调用 ecc_init()。
+			 */
+			/*
+			if (ecc_prepare_workspace() != 0)
+			{
+				return -1;
+			}
+			*/
+			//clear data_buf and copy data to data_buf
+			memset(data_buf,0,DATABUF_LEN);
 	memcpy(data_buf,c,DATA_LEN);
 	//compy correction code to ecc
 	memcpy(ecc,c+DATA_LEN,ECC_LEN);
@@ -176,7 +178,7 @@ int ecc_dec(unsigned char *d, const unsigned char *c)
 	memset(error_loc,0,sizeof(error_loc));
 	error_num=decode_bch(&ecc_bch,data_buf,DATA_LEN,ecc,NULL,NULL,error_loc);
 	//correct errors
-#if LAC_USE_CT_ECC_CORRECT
+#if LAC_CFG_CT_ECC_CORRECT
 	{
 		uint32_t positive_mask = 0u - (uint32_t)(error_num > 0);
 		uint32_t err_u = ((uint32_t)error_num) & positive_mask;

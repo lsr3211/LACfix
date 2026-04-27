@@ -54,7 +54,7 @@
 #define BCH_ECC_WORDS(_p)      DIV_ROUND_UP(GF_M(_p)*GF_T(_p), 32)
 #define BCH_ECC_BYTES(_p)      DIV_ROUND_UP(GF_M(_p)*GF_T(_p), 8)
 
-#if LAC_USE_CT_BCH
+#if LAC_CFG_CT_BCH
 #define BCH_STD_UNUSED __attribute__((unused))
 #else
 #define BCH_STD_UNUSED
@@ -344,7 +344,7 @@ static void BCH_STD_UNUSED compute_syndromes(struct bch_control *bch,
 		syn[2*j+1] = gf_sqr(bch, syn[j]);
 }
 
-#if LAC_USE_CT_BCH
+#if LAC_CFG_CT_BCH
 static unsigned int ct_gf_sqr(struct bch_control *bch, unsigned int a);
 
 static unsigned int BCH_STD_UNUSED syndrome_a_pow_ct(struct bch_control *bch,
@@ -438,7 +438,7 @@ static void compute_syndromes_ct(struct bch_control *bch, uint32_t *ecc,
 		for (i = 31; i >= 0; i--) {
 			uint32_t bit_mask = 0u - ((poly >> i) & 1u);
 
-#if LAC_USE_CT_BCH_SYNDROME_APOW
+#if LAC_CFG_CT_BCH_SYNDROME_APOW
 			for (j = 0; j < 2*t; j += 2)
 				syn[j] ^= syndrome_a_pow_ct(bch,
 							    (j+1)*(i+s)) &
@@ -638,7 +638,7 @@ static int BCH_STD_UNUSED compute_error_locator_polynomial(struct bch_control *b
 	return (elp->deg > t) ? -1 : (int)elp->deg;
 }
 
-#if LAC_USE_CT_BCH
+#if LAC_CFG_CT_BCH
 static int compute_error_locator_polynomial_ct(struct bch_control *bch,
 					       const unsigned int *syn)
 {
@@ -1208,7 +1208,7 @@ static int BCH_STD_UNUSED find_poly_roots(struct bch_control *bch, unsigned int 
 	return cnt;
 }
 
-#if LAC_USE_CT_BCH
+#if LAC_CFG_CT_BCH
 static int chien_search_ct(struct bch_control *bch, unsigned int len,
 			   struct gf_poly *p, unsigned int *roots)
 {
@@ -1312,7 +1312,7 @@ int decode_bch(struct bch_control *bch, const uint8_t *data, unsigned int len,
 			/* compute received data ecc into an internal buffer */
 			if (!data || !recv_ecc)
 				return -EINVAL;
-			#if LAC_USE_CT_BCH
+			#if LAC_CFG_CT_BCH
 			compute_syndromes_data_ecc_ct(bch, data, len, recv_ecc,
 						      bch->syn);
 			syn = bch->syn;
@@ -1332,13 +1332,13 @@ int decode_bch(struct bch_control *bch, const uint8_t *data, unsigned int len,
 				bch->ecc_buf[i] ^= bch->ecc_buf2[i];
 				sum |= bch->ecc_buf[i];
 			}
-			#if !LAC_USE_CT_BCH
+			#if !LAC_CFG_CT_BCH
 			if (!sum)
 				/* no error found */
 				return 0;
 			#endif
 		}
-		#if LAC_USE_CT_BCH
+		#if LAC_CFG_CT_BCH
 		compute_syndromes_ct(bch, bch->ecc_buf, bch->syn);
 		#else
 		compute_syndromes(bch, bch->ecc_buf, bch->syn);
@@ -1347,7 +1347,7 @@ int decode_bch(struct bch_control *bch, const uint8_t *data, unsigned int len,
 	}
 
 have_syndromes:
-	#if LAC_USE_CT_BCH
+	#if LAC_CFG_CT_BCH
 	err = compute_error_locator_polynomial_ct(bch, syn);
 	nroots = chien_search_ct(bch, len, bch->elp, errloc);
 		{
@@ -1371,7 +1371,7 @@ have_syndromes:
 	#endif
 
 	nbits = (len*8)+bch->ecc_bits;
-	#if LAC_USE_CT_BCH
+	#if LAC_CFG_CT_BCH
 	{
 		uint32_t invalid = 0;
 		uint32_t mask_err_pos = 0u - (uint32_t)(err > 0);

@@ -3,12 +3,21 @@
 #include "test_cpucycles.h"
 #include "rand.h"
 #include "api.h"
+#include "ecc.h"
 #include <stdio.h>
 #include <string.h>
 
 int main(int argc, char **argv)
 {
 	int test_poly_aff_cpucycles(void);
+	int ret = 0;
+
+	if (ecc_init() != 0)
+	{
+		printf("ecc_init failed\n");
+		return -1;
+	}
+
 	if(argc!=2)
 	{
 		printf("command format:\n");
@@ -106,6 +115,13 @@ int main(int argc, char **argv)
 			test_poly_mul_speed();
 		}
 		printf("============================================\n");
+	}
+
+	ret = ecc_free();
+	if (ret != 0)
+	{
+		printf("ecc_free failed\n");
+		return -1;
 	}
 
 	return 0;

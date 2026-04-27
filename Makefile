@@ -1,51 +1,66 @@
 objects = main.o test_correctness.o test_cpucycles.o test_speed.o \
           ake.o ke.o kem.o encrypt.o ecc.o bch.o bin-lwe.o rand.o rng.o
-#cflags = -O3 -Wall -DNDEBUG -DLAC_SIGNED_CHAR 
-cflags = -O3 -Wall -DNDEBUG -DLAC_SIGNED_CHAR -DLAC_USE_CT_BCH=1 -I/opt/homebrew/opt/openssl@3/include
 
+CC = gcc
+OPENSSL_PREFIX ?= /opt/homebrew/opt/openssl@3
+PROFILE ?= CT
+//默认CT，要切换就make PROFILE=STD
 
+BASE_CFLAGS = -O3 -Wall -DNDEBUG -DLAC_SIGNED_CHAR -I$(OPENSSL_PREFIX)/include
+LDLIBS = -L$(OPENSSL_PREFIX)/lib -lcrypto -lz
+
+ifeq ($(PROFILE),STD)
+PROFILE_CFLAGS = -DLAC_CONFIG_PROFILE=LAC_PROFILE_STD
+else ifeq ($(PROFILE),CT)
+PROFILE_CFLAGS = -DLAC_CONFIG_PROFILE=LAC_PROFILE_CT
+else
+$(error Unsupported PROFILE '$(PROFILE)'. Use PROFILE=STD or PROFILE=CT)
+endif
+
+EXTRA_CFLAGS ?=
+CFLAGS = $(BASE_CFLAGS) $(PROFILE_CFLAGS) $(EXTRA_CFLAGS)
 
 lac : $(objects)
-	gcc -o lac $(objects) -L/opt/homebrew/opt/openssl@3/lib -lcrypto -lz
+	$(CC) -o lac $(objects) $(LDLIBS)
 
 main.o: main.c test_correctness.h test_cpucycles.h test_speed.h api.h lac_param.h
-	gcc -c main.c $(cflags)
+	$(CC) -c main.c $(CFLAGS)
 
 test_correctness.o: test_correctness.c api.h ecc.h rand.h lac_param.h
-	gcc -c test_correctness.c $(cflags)
+	$(CC) -c test_correctness.c $(CFLAGS)
 
 test_cpucycles.o: test_cpucycles.c api.h rand.h ecc.h lac_param.h
-	gcc -c test_cpucycles.c $(cflags)
+	$(CC) -c test_cpucycles.c $(CFLAGS)
 
 test_speed.o: test_speed.c api.h rand.h ecc.h lac_param.h
-	gcc -c test_speed.c $(cflags)
+	$(CC) -c test_speed.c $(CFLAGS)
 
 ake.o: ake.c api.h rand.h lac_param.h
-	gcc -c ake.c $(cflags)
+	$(CC) -c ake.c $(CFLAGS)
 
 ke.o: ke.c api.h rand.h lac_param.h
-	gcc -c ke.c $(cflags)
+	$(CC) -c ke.c $(CFLAGS)
 
 kem.o: kem.c api.h rand.h ecc.h bin-lwe.h lac_param.h
-	gcc -c kem.c $(cflags)
+	$(CC) -c kem.c $(CFLAGS)
 
 encrypt.o: encrypt.c api.h rand.h ecc.h bin-lwe.h lac_param.h 
-	gcc -c encrypt.c $(cflags)
+	$(CC) -c encrypt.c $(CFLAGS)
 
 ecc.o: ecc.c bch.h ecc.h lac_param.h bch128.h bch192.h bch256.h
-	gcc -c ecc.c $(cflags)
+	$(CC) -c ecc.c $(CFLAGS)
 
 bch.o: bch.c bch.h compat.h
-	gcc -c bch.c $(cflags)
+	$(CC) -c bch.c $(CFLAGS)
 
 bin-lwe.o: bin-lwe.c lac_param.h rand.h bin-lwe.h 
-	gcc -c bin-lwe.c $(cflags)
+	$(CC) -c bin-lwe.c $(CFLAGS)
 
 rand.o: rand.c lac_param.h rand.h
-	gcc -c rand.c $(cflags) 
+	$(CC) -c rand.c $(CFLAGS) 
 
 rng.o: rng.c rng.h
-	gcc -c rng.c $(cflags) 
+	$(CC) -c rng.c $(CFLAGS) 
 
 clean:
 	rm -f lac lac.exemak $(objects)

@@ -98,7 +98,7 @@ int kem_enc_fo_seed(const unsigned char *pk, unsigned char *k, unsigned char *c,
 // decrypt of fo mode
 int kem_dec_fo(const unsigned char *pk, const unsigned char *sk, const unsigned char *c, unsigned char *k)
 {
-#if LAC_USE_CT_KEM_DEC
+#if LAC_CFG_CT_KEM_DEC_VERIFY
 	unsigned char buf[MESSAGE_LEN+CIPHER_LEN],seed[SEED_LEN];
 	unsigned char c_v[CIPHER_LEN];
 	unsigned char k_good[MESSAGE_LEN],k_bad[MESSAGE_LEN];
