@@ -7,6 +7,10 @@ PROFILE ?= CT
 # 默认 CT，要切换就 make PROFILE=STD 或 make PROFILE=CTNEON
 NEON ?= AUTO
 
+ifdef profile
+PROFILE := $(profile)
+endif
+
 BASE_CFLAGS = -O3 -Wall -DNDEBUG -DLAC_SIGNED_CHAR -I$(OPENSSL_PREFIX)/include
 LDLIBS = -L$(OPENSSL_PREFIX)/lib -lcrypto -lz
 

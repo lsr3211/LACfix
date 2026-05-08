@@ -395,18 +395,6 @@ static inline uint32_t ct_mask_lt_u32(uint32_t a, uint32_t b)
     return (uint32_t)(0u - x);
 }
 
-/* cond = 0xffffffff => select x, else select y */
-static inline uint32_t ct_select_u32(uint32_t cond, uint32_t x, uint32_t y)
-{
-    return (x & cond) | (y & ~cond);
-}
-
-static inline uint16_t ct_select_u16(uint32_t cond, uint16_t x, uint16_t y)
-{
-    uint16_t m = (uint16_t)cond;
-    return (uint16_t)((x & m) | (y & ~m));
-}
-
 static inline void ct_swap_u32(uint32_t *a, uint32_t *b, uint32_t swap_mask)
 {
     uint32_t t = (*a ^ *b) & swap_mask;
@@ -426,26 +414,6 @@ typedef struct {
 	     uint32_t key;
 	     uint16_t idx;
 	 } psi_item_t;
-
-static inline uint32_t psi_item_lt_mask(const psi_item_t *a, const psi_item_t *b)
-{
-    uint32_t key_lt = ct_mask_lt_u32(a->key, b->key);
-    uint32_t key_gt = ct_mask_lt_u32(b->key, a->key);
-    uint32_t key_eq = ct_mask_eq_u32(a->key, b->key);
-    uint32_t idx_lt = ct_mask_lt_u32((uint32_t)a->idx, (uint32_t)b->idx);
-
-    /* a < b 当且仅当 key_a < key_b，或 key 相等但 idx_a < idx_b */
-    return key_lt | (key_eq & idx_lt);
-}
-static inline void psi_item_minmax(psi_item_t *a, psi_item_t *b)
-{
-    /* 若 b < a，则交换；否则不动 */
-    uint32_t b_lt_a = psi_item_lt_mask(b, a);
-
-    ct_swap_u32(&a->key, &b->key, b_lt_a);
-    ct_swap_u16(&a->idx, &b->idx, b_lt_a);
-}
-
 
 /* 从随机字节流中取 32-bit little-endian */
 static inline uint32_t load_u32_le(const unsigned char *p)
@@ -506,7 +474,7 @@ static inline void psi_item_compare_exchange(psi_item_t *a, psi_item_t *b, uint3
  * 你的 vec_num 在当前参数集里本来就是 512/1024 这类值，通常满足。
  * 若未来参数集不是 2 的幂，可以 pad 到 next_pow2，再把补位元素 key 设成最大值。
  */
-static void psi_bitonic_sort(psi_item_t *x, unsigned int n)
+static void LAC_UNUSED_FN psi_bitonic_sort(psi_item_t *x, unsigned int n)
  {
     unsigned int k, j, i;
 
@@ -523,28 +491,6 @@ static void psi_bitonic_sort(psi_item_t *x, unsigned int n)
          }
      }
  }
-static void psi_partial_select_smallest(psi_item_t *items,
-                                        unsigned int n,
-                                        unsigned int topk)
-{
-    unsigned int r, j;
-
-    if (topk > n) topk = n;
-
-    for (r = 0; r < topk; r++) {
-        /*
-         * 目标：
-         * 把 items[r..n-1] 中最小的元素“冒”到 items[r]
-         *
-         * 固定流程做法：
-         * 让 items[r] 依次和后面每个元素做 minmax，
-         * 每次都把更小者留在 items[r]。
-         */
-        for (j = r + 1; j < n; j++) {
-            psi_item_minmax(&items[r], &items[j]);
-        }
-    }
-}
 /*
  * 生成足够随机字节填充 key。
  * 这里只给骨架：直接沿用 pseudo_random_bytes。
@@ -566,7 +512,7 @@ static int fill_random_keys_scalar(psi_item_t *items, unsigned int vec_num, unsi
 	    return 0;
 }
 
-static int fill_random_keys(psi_item_t *items, unsigned int vec_num, unsigned char *seed)
+static int LAC_UNUSED_FN fill_random_keys(psi_item_t *items, unsigned int vec_num, unsigned char *seed)
 {
     return fill_random_keys_scalar(items, vec_num, seed);
 }
@@ -1037,12 +983,6 @@ static inline uint16_t ct_mask_eq_i16(int16_t x, int16_t y)
 
 
 
-static inline int32_t ct_cond_sub_q(int32_t x, int32_t q)
-{
-    int32_t t = x - q;
-    return t + ((t >> 31) & q);
-}
-
 /*
  * 对当前 CT 标量路径，输入满足：
  *   x = gather1 - gather0 + BIG_Q (+ e[i])
@@ -1069,11 +1009,6 @@ static inline uint16_t mod_q_ct_bounded_u32(uint32_t x)
     }
 
     return (uint16_t)x;
-}
-
-static inline int32_t ct_cond_add_q(int32_t x, int32_t q)
-{
-    return x + ((x >> 31) & q);
 }
 
 static void build_vs_masks(const unsigned char *a,
@@ -1279,17 +1214,6 @@ static int LAC_UNUSED_FN poly_aff_scalar_backend(const unsigned char *a,
 }
 
 #if LAC_CFG_CT_NEON_BINLWE_CORE
-static inline uint32_t neon_hsum_u32x4(uint32x4_t x)
-{
-#if defined(__aarch64__)
-    return vaddvq_u32(x);
-#else
-    uint32_t lanes[4];
-    vst1q_u32(lanes, x);
-    return lanes[0] + lanes[1] + lanes[2] + lanes[3];
-#endif
-}
-
 static inline uint16x4_t mod_q_ct_bounded_u32x4(uint32x4_t x)
 {
     unsigned int k;
@@ -1311,32 +1235,6 @@ static inline uint32x4_t neon_hsum4_u32x4(uint32x4_t a,
     uint32x4_t ab = vpaddq_u32(a, b);
     uint32x4_t cd = vpaddq_u32(c, d);
     return vpaddq_u32(ab, cd);
-}
-
-static inline void poly_ct_neon_gather(const int16_t *v_base,
-                                       const uint16_t *s0,
-                                       const uint16_t *s1,
-                                       int32_t *gather0,
-                                       int32_t *gather1)
-{
-    unsigned int j;
-    const uint16_t *v_u16 = (const uint16_t *)v_base;
-    uint32x4_t acc0 = vdupq_n_u32(0);
-    uint32x4_t acc1 = vdupq_n_u32(0);
-
-    for (j = 0; j < DIM_N; j += 8) {
-        uint16x8_t v_vec = vld1q_u16(v_u16 + j);
-        uint16x8_t s0_vec = vld1q_u16(s0 + j);
-        uint16x8_t s1_vec = vld1q_u16(s1 + j);
-        uint16x8_t picked0 = vandq_u16(v_vec, s0_vec);
-        uint16x8_t picked1 = vandq_u16(v_vec, s1_vec);
-
-        acc0 = vpadalq_u16(acc0, picked0);
-        acc1 = vpadalq_u16(acc1, picked1);
-    }
-
-    *gather0 = (int32_t)neon_hsum_u32x4(acc0);
-    *gather1 = (int32_t)neon_hsum_u32x4(acc1);
 }
 
 static inline void poly_ct_neon_gather4_vec(const int16_t *v_base0,
@@ -1417,29 +1315,19 @@ static int poly_mul_ct_neon_backend(const unsigned char *a, const lac_small_t *s
 
     if (i < vec_num) {
         unsigned int rem = vec_num - i;
-        int32_t gather0[4] = {0, 0, 0, 0};
-        int32_t gather1[4] = {0, 0, 0, 0};
+        const int16_t *v_base0 = v + DIM_N - i - 1;
+        const int16_t *v_base1 = (rem > 1u) ? v + DIM_N - (i + 1u) - 1 : v_base0;
+        const int16_t *v_base2 = (rem > 2u) ? v + DIM_N - (i + 2u) - 1 : v_base0;
+        uint32x4_t gather0;
+        uint32x4_t gather1;
         uint32x4_t x_vec;
         uint8x8_t out_vec;
 
-        switch (rem) {
-        case 3:
-            poly_ct_neon_gather(v + DIM_N - (i + 2u) - 1, s0, s1,
-                                &gather0[2], &gather1[2]);
-        case 2:
-            poly_ct_neon_gather(v + DIM_N - (i + 1u) - 1, s0, s1,
-                                &gather0[1], &gather1[1]);
-        case 1:
-            poly_ct_neon_gather(v + DIM_N - i - 1, s0, s1,
-                                &gather0[0], &gather1[0]);
-        default:
-            break;
-        }
-
-        x_vec = (uint32x4_t){(uint32_t)(gather1[0] - gather0[0] + BIG_Q),
-                             (uint32_t)(gather1[1] - gather0[1] + BIG_Q),
-                             (uint32_t)(gather1[2] - gather0[2] + BIG_Q),
-                             (uint32_t)(gather1[3] - gather0[3] + BIG_Q)};
+        poly_ct_neon_gather4_vec(v_base0, v_base1, v_base2, v_base0,
+                                 s0, s1, &gather0, &gather1);
+        x_vec = vreinterpretq_u32_s32(vaddq_s32(vsubq_s32(vreinterpretq_s32_u32(gather1),
+                                                          vreinterpretq_s32_u32(gather0)),
+                                                vdupq_n_s32(BIG_Q)));
         out_vec = vmovn_u16(vcombine_u16(mod_q_ct_bounded_u32x4(x_vec),
                                          vdup_n_u16(0)));
 
@@ -1498,33 +1386,25 @@ static int poly_aff_ct_neon_backend(const unsigned char *a, const lac_small_t *s
 
     if (i < vec_num) {
         unsigned int rem = vec_num - i;
-        int32_t gather0[4] = {0, 0, 0, 0};
-        int32_t gather1[4] = {0, 0, 0, 0};
-        int32_t eval[4] = {0, 0, 0, 0};
+        const int16_t *v_base0 = v + DIM_N - i - 1;
+        const int16_t *v_base1 = (rem > 1u) ? v + DIM_N - (i + 1u) - 1 : v_base0;
+        const int16_t *v_base2 = (rem > 2u) ? v + DIM_N - (i + 2u) - 1 : v_base0;
+        int8x8_t e8 = {e[i],
+                       (rem > 1u) ? e[i + 1u] : 0,
+                       (rem > 2u) ? e[i + 2u] : 0,
+                       0, 0, 0, 0, 0};
+        int32x4_t e32 = vmovl_s16(vget_low_s16(vmovl_s8(e8)));
+        uint32x4_t gather0;
+        uint32x4_t gather1;
         uint32x4_t x_vec;
         uint8x8_t out_vec;
 
-        switch (rem) {
-        case 3:
-            poly_ct_neon_gather(v + DIM_N - (i + 2u) - 1, s0, s1,
-                                &gather0[2], &gather1[2]);
-            eval[2] = (int32_t)e[i + 2u];
-        case 2:
-            poly_ct_neon_gather(v + DIM_N - (i + 1u) - 1, s0, s1,
-                                &gather0[1], &gather1[1]);
-            eval[1] = (int32_t)e[i + 1u];
-        case 1:
-            poly_ct_neon_gather(v + DIM_N - i - 1, s0, s1,
-                                &gather0[0], &gather1[0]);
-            eval[0] = (int32_t)e[i];
-        default:
-            break;
-        }
-
-        x_vec = (uint32x4_t){(uint32_t)(gather1[0] - gather0[0] + eval[0] + BIG_Q),
-                             (uint32_t)(gather1[1] - gather0[1] + eval[1] + BIG_Q),
-                             (uint32_t)(gather1[2] - gather0[2] + eval[2] + BIG_Q),
-                             (uint32_t)(gather1[3] - gather0[3] + eval[3] + BIG_Q)};
+        poly_ct_neon_gather4_vec(v_base0, v_base1, v_base2, v_base0,
+                                 s0, s1, &gather0, &gather1);
+        x_vec = vreinterpretq_u32_s32(vaddq_s32(vaddq_s32(vsubq_s32(vreinterpretq_s32_u32(gather1),
+                                                                    vreinterpretq_s32_u32(gather0)),
+                                                          e32),
+                                                vdupq_n_s32(BIG_Q)));
         out_vec = vmovn_u16(vcombine_u16(mod_q_ct_bounded_u32x4(x_vec),
                                          vdup_n_u16(0)));
 
@@ -1559,8 +1439,8 @@ int poly_aff(const unsigned char *a, const lac_small_t *s, lac_small_t *e, unsig
 #endif
 }
 
-static int poly_compress_scalar(const unsigned char *in, unsigned char *out,
-                                unsigned int vec_num)
+static int LAC_UNUSED_FN poly_compress_scalar(const unsigned char *in, unsigned char *out,
+                                              unsigned int vec_num)
 {
 	int i,loop;
 	loop=vec_num/2;
@@ -1574,6 +1454,16 @@ static int poly_compress_scalar(const unsigned char *in, unsigned char *out,
 }
 
 #if LAC_CFG_CT_NEON_BINLWE_PACK
+static inline uint8x8_t poly_compress4_ct_neon(const unsigned char *in,
+                                               uint16x8_t add8)
+{
+    uint8x8_t src = vld1_u8(in);
+    uint16x8_t rounded = vshrq_n_u16(vaddq_u16(vmovl_u8(src), add8), 4);
+    uint8x8x2_t eo = vuzp_u8(vmovn_u16(rounded), vdup_n_u8(0));
+
+    return vorr_u8(eo.val[0], vshl_n_u8(eo.val[1], 4));
+}
+
 static int poly_compress_ct_neon(const unsigned char *in, unsigned char *out,
                                  unsigned int vec_num)
 {
@@ -1599,43 +1489,22 @@ static int poly_compress_ct_neon(const unsigned char *in, unsigned char *out,
     }
     if (i < loop) {
         unsigned int rem = loop - i;
-        uint8x16_t src = vdupq_n_u8(0);
-        uint8x8_t packed;
 
-        switch (rem << 1) {
-        case 14: src = vld1q_lane_u8(in + (i << 1) + 13u, src, 13);
-        case 13: src = vld1q_lane_u8(in + (i << 1) + 12u, src, 12);
-        case 12: src = vld1q_lane_u8(in + (i << 1) + 11u, src, 11);
-        case 11: src = vld1q_lane_u8(in + (i << 1) + 10u, src, 10);
-        case 10: src = vld1q_lane_u8(in + (i << 1) + 9u, src, 9);
-        case 9:  src = vld1q_lane_u8(in + (i << 1) + 8u, src, 8);
-        case 8:  src = vld1q_lane_u8(in + (i << 1) + 7u, src, 7);
-        case 7:  src = vld1q_lane_u8(in + (i << 1) + 6u, src, 6);
-        case 6:  src = vld1q_lane_u8(in + (i << 1) + 5u, src, 5);
-        case 5:  src = vld1q_lane_u8(in + (i << 1) + 4u, src, 4);
-        case 4:  src = vld1q_lane_u8(in + (i << 1) + 3u, src, 3);
-        case 3:  src = vld1q_lane_u8(in + (i << 1) + 2u, src, 2);
-        case 2:  src = vld1q_lane_u8(in + (i << 1) + 1u, src, 1);
-        case 1:  src = vld1q_lane_u8(in + (i << 1), src, 0);
-        default: break;
+        if (rem >= 4u) {
+            uint8x8_t packed4 = poly_compress4_ct_neon(in + (i << 1), add8);
+            vst1_lane_u8(out + i, packed4, 0);
+            vst1_lane_u8(out + i + 1u, packed4, 1);
+            vst1_lane_u8(out + i + 2u, packed4, 2);
+            vst1_lane_u8(out + i + 3u, packed4, 3);
+            i += 4u;
+            rem -= 4u;
         }
 
-        {
-            uint16x8_t rounded_lo = vshrq_n_u16(vaddq_u16(vmovl_u8(vget_low_u8(src)), add8), 4);
-            uint16x8_t rounded_hi = vshrq_n_u16(vaddq_u16(vmovl_u8(vget_high_u8(src)), add8), 4);
-            uint8x8x2_t eo = vuzp_u8(vmovn_u16(rounded_lo), vmovn_u16(rounded_hi));
-            packed = veor_u8(eo.val[0], vshl_n_u8(eo.val[1], 4));
-        }
-
-        switch (rem) {
-        case 7: vst1_lane_u8(out + i + 6u, packed, 6);
-        case 6: vst1_lane_u8(out + i + 5u, packed, 5);
-        case 5: vst1_lane_u8(out + i + 4u, packed, 4);
-        case 4: vst1_lane_u8(out + i + 3u, packed, 3);
-        case 3: vst1_lane_u8(out + i + 2u, packed, 2);
-        case 2: vst1_lane_u8(out + i + 1u, packed, 1);
-        case 1: vst1_lane_u8(out + i, packed, 0);
-        default: break;
+        while (rem != 0u) {
+            out[i] = (unsigned char)((in[i * 2u] + 0x08u) >> 4);
+            out[i] = (unsigned char)(out[i] ^ ((in[i * 2u + 1u] + 0x08u) & 0xf0u));
+            i++;
+            rem--;
         }
     }
 
@@ -1654,8 +1523,8 @@ int poly_compress(const unsigned char *in, unsigned char *out,
 #endif
 }
 
-static int poly_decompress_scalar(const unsigned char *in, unsigned char *out,
-                                  unsigned int vec_num)
+static int LAC_UNUSED_FN poly_decompress_scalar(const unsigned char *in, unsigned char *out,
+                                                unsigned int vec_num)
 {
 	int i,loop;
 	loop=vec_num/2;
@@ -1669,6 +1538,26 @@ static int poly_decompress_scalar(const unsigned char *in, unsigned char *out,
 }
 
 #if LAC_CFG_CT_NEON_BINLWE_PACK
+static inline uint8x16_t poly_decompress4_ct_neon(const unsigned char *in,
+                                                  uint8x8_t hi_mask)
+{
+    uint8x8_t src = vdup_n_u8(0);
+    uint8x8_t even;
+    uint8x8_t odd;
+    uint8x8x2_t inter;
+
+    src = vld1_lane_u8(in, src, 0);
+    src = vld1_lane_u8(in + 1u, src, 1);
+    src = vld1_lane_u8(in + 2u, src, 2);
+    src = vld1_lane_u8(in + 3u, src, 3);
+
+    even = vshl_n_u8(src, 4);
+    odd = vand_u8(src, hi_mask);
+    inter = vzip_u8(even, odd);
+
+    return vcombine_u8(inter.val[0], inter.val[1]);
+}
+
 static int poly_decompress_ct_neon(const unsigned char *in, unsigned char *out,
                                    unsigned int vec_num)
 {
@@ -1693,44 +1582,18 @@ static int poly_decompress_ct_neon(const unsigned char *in, unsigned char *out,
     }
     if (i < loop) {
         unsigned int rem = loop - i;
-        uint8x8_t src = vdup_n_u8(0);
-        uint8x8_t even;
-        uint8x8_t odd;
-        uint8x8x2_t inter;
-        uint8x16_t expanded;
 
-        switch (rem) {
-        case 7: src = vld1_lane_u8(in + i + 6u, src, 6);
-        case 6: src = vld1_lane_u8(in + i + 5u, src, 5);
-        case 5: src = vld1_lane_u8(in + i + 4u, src, 4);
-        case 4: src = vld1_lane_u8(in + i + 3u, src, 3);
-        case 3: src = vld1_lane_u8(in + i + 2u, src, 2);
-        case 2: src = vld1_lane_u8(in + i + 1u, src, 1);
-        case 1: src = vld1_lane_u8(in + i, src, 0);
-        default: break;
+        if (rem >= 4u) {
+            vst1_u8(out + (i << 1), vget_low_u8(poly_decompress4_ct_neon(in + i, hi_mask)));
+            i += 4u;
+            rem -= 4u;
         }
 
-        even = vshl_n_u8(src, 4);
-        odd = vand_u8(src, hi_mask);
-        inter = vzip_u8(even, odd);
-        expanded = vcombine_u8(inter.val[0], inter.val[1]);
-
-        switch (rem << 1) {
-        case 14: vst1q_lane_u8(out + (i << 1) + 13u, expanded, 13);
-        case 13: vst1q_lane_u8(out + (i << 1) + 12u, expanded, 12);
-        case 12: vst1q_lane_u8(out + (i << 1) + 11u, expanded, 11);
-        case 11: vst1q_lane_u8(out + (i << 1) + 10u, expanded, 10);
-        case 10: vst1q_lane_u8(out + (i << 1) + 9u, expanded, 9);
-        case 9:  vst1q_lane_u8(out + (i << 1) + 8u, expanded, 8);
-        case 8:  vst1q_lane_u8(out + (i << 1) + 7u, expanded, 7);
-        case 7:  vst1q_lane_u8(out + (i << 1) + 6u, expanded, 6);
-        case 6:  vst1q_lane_u8(out + (i << 1) + 5u, expanded, 5);
-        case 5:  vst1q_lane_u8(out + (i << 1) + 4u, expanded, 4);
-        case 4:  vst1q_lane_u8(out + (i << 1) + 3u, expanded, 3);
-        case 3:  vst1q_lane_u8(out + (i << 1) + 2u, expanded, 2);
-        case 2:  vst1q_lane_u8(out + (i << 1) + 1u, expanded, 1);
-        case 1:  vst1q_lane_u8(out + (i << 1), expanded, 0);
-        default: break;
+        while (rem != 0u) {
+            out[i * 2u] = (unsigned char)(in[i] << 4);
+            out[i * 2u + 1u] = (unsigned char)(in[i] & 0xf0u);
+            i++;
+            rem--;
         }
     }
 

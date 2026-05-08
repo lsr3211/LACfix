@@ -159,6 +159,19 @@ typedef char lac_small_t;
 #define LAC_CFG_CT_NEON_BINLWE_PACK LAC_CFG_CT_NEON_AVAILABLE
 #endif
 
+/* encrypt.c 阈值恢复与 message 注入路径。 */
+#ifndef LAC_CFG_CT_NEON_ENCRYPT
+#define LAC_CFG_CT_NEON_ENCRYPT LAC_CFG_CT_NEON_AVAILABLE
+#endif
+
+#ifndef LAC_CFG_CT_NEON_PKE_THRESHOLD_DEC
+#define LAC_CFG_CT_NEON_PKE_THRESHOLD_DEC LAC_CFG_CT_NEON_ENCRYPT
+#endif
+
+#ifndef LAC_CFG_CT_NEON_PKE_MESSAGE_ADD
+#define LAC_CFG_CT_NEON_PKE_MESSAGE_ADD LAC_CFG_CT_NEON_ENCRYPT
+#endif
+
 /* 兼容别名：保留之前的 SIMD 命名，避免后续小范围代码还没改完时断掉。 */
 #ifndef LAC_CFG_SIMD
 #define LAC_CFG_SIMD LAC_CFG_CT_NEON
@@ -174,6 +187,10 @@ typedef char lac_small_t;
 
 #ifndef LAC_CFG_SIMD_BINLWE_PACK
 #define LAC_CFG_SIMD_BINLWE_PACK LAC_CFG_CT_NEON_BINLWE_PACK
+#endif
+
+#ifndef LAC_CFG_SIMD_ENCRYPT
+#define LAC_CFG_SIMD_ENCRYPT LAC_CFG_CT_NEON_ENCRYPT
 #endif
 
 /* ===== 修复类 / 安全卫生类开关 =====

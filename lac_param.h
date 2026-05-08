@@ -1,6 +1,8 @@
 //#define TEST_ROW_ERROR_RATE
 //security level
+#if !defined(LAC128) && !defined(LAC192) && !defined(LAC256)
 #define LAC128
+#endif
 //modulus
 #define Q 251
 #define BIG_Q 257024//1024*Q 

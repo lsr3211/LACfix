@@ -1401,10 +1401,14 @@ have_syndromes:
 		}
 	}
 	#endif
+#if LAC_CFG_CT_BCH
 	{
 		uint32_t ok_mask = ~((uint32_t)err >> 31);
 		return ct_select_int(ok_mask, err, -EBADMSG);
 	}
+#else
+	return (err >= 0) ? err : -EBADMSG;
+#endif
 }
 EXPORT_SYMBOL_GPL(decode_bch);
 
