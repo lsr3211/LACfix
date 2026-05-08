@@ -124,6 +124,12 @@ typedef char lac_small_t;
 #define LAC_CFG_CT_PKE_SUBMODQ LAC_PROFILE_IS_CT
 #endif
 
+/* 控制 pke_enc_seed 中 message 注入 e2 是否走 CT 标量路径。
+ * 当前 CT 标量与 STD 逻辑等价，但保留独立开关，便于和 CT-NEON 对齐。 */
+#ifndef LAC_CFG_CT_PKE_MESSAGE_ADD
+#define LAC_CFG_CT_PKE_MESSAGE_ADD LAC_PROFILE_IS_CT
+#endif
+
 /* --- ecc.c --- */
 
 /* 控制 ecc_dec 的纠错写回是否使用固定迭代 + 掩码。 */

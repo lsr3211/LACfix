@@ -101,6 +101,27 @@ static inline int16x8_t enc_neon_sub_mod_q8(uint8x8_t x, uint8x8_t y)
 #endif
 
 #ifndef LAC256
+static void LAC_ENC_UNUSED_FN pke_recover_msg_std(const unsigned char *c2,
+						  const unsigned char *out,
+						  unsigned char *p_code,
+						  int c2_len)
+{
+	int i;
+	const int low=Q/4;
+	const int high=Q*3/4;
+
+	for(i=0;i<c2_len;i++)
+	{
+		int temp=enc_sub_mod_q_u8(c2[i], out[i]);
+
+		//recover m from m*q/2+e, RATIO=q/2
+		if(temp>=low && temp<high)
+		{
+			p_code[i/8]=p_code[i/8]^(1<<(i%8));
+		}
+	}
+}
+
 static void LAC_ENC_UNUSED_FN pke_recover_msg_ct_scalar(const unsigned char *c2,
 							const unsigned char *out,
 							unsigned char *p_code,
@@ -157,7 +178,57 @@ static void pke_recover_msg_ct_neon(const unsigned char *c2,
 	}
 }
 #endif
+
+static void pke_recover_msg(const unsigned char *c2,
+			    const unsigned char *out,
+			    unsigned char *p_code,
+			    int c2_len)
+{
+#if LAC_CFG_CT_NEON_PKE_THRESHOLD_DEC
+	pke_recover_msg_ct_neon(c2, out, p_code, c2_len);
+#elif LAC_CFG_CT_PKE_THRESHOLD_DEC
+	pke_recover_msg_ct_scalar(c2, out, p_code, c2_len);
 #else
+	pke_recover_msg_std(c2, out, p_code, c2_len);
+#endif
+}
+#else
+static void LAC_ENC_UNUSED_FN pke_recover_msg_d2_std(const unsigned char *c2,
+						     const unsigned char *out,
+						     unsigned char *p_code,
+						     int vec_bound)
+{
+	int i;
+	int temp1,temp2;
+	int center_point=Q/2;
+	int d2_bound=Q/2;
+
+	for(i=0;i<vec_bound;i++)
+	{
+		//D2 decoding:compute m*q/2+e1 + m*q/2+e2 in [0,2*Q]
+		temp1=enc_sub_mod_q_u8(c2[i], out[i]);
+		temp2=enc_sub_mod_q_u8(c2[i+vec_bound], out[i+vec_bound]);
+
+		//shift
+		if(temp1<center_point)
+		{
+			temp1=center_point-temp1+center_point;//mirror around Q/2
+		}
+		if(temp2<center_point)
+		{
+			temp2=center_point-temp2+center_point;//mirror around Q/2
+		}
+		//merge erors
+		temp1+=temp2-Q;
+
+		//recover m from m*q/2+e1 + m*q/2+e2, RATIO=q/2
+		if(temp1<d2_bound)
+		{
+			p_code[i/8]=p_code[i/8]^(1<<(i%8));
+		}
+	}
+}
+
 static void LAC_ENC_UNUSED_FN pke_recover_msg_d2_ct_scalar(const unsigned char *c2,
 							   const unsigned char *out,
 							   unsigned char *p_code,
@@ -243,11 +314,25 @@ static void pke_recover_msg_d2_ct_neon(const unsigned char *c2,
 	}
 }
 #endif
+
+static void pke_recover_msg_d2(const unsigned char *c2,
+			       const unsigned char *out,
+			       unsigned char *p_code,
+			       int vec_bound)
+{
+#if LAC_CFG_CT_NEON_PKE_THRESHOLD_DEC
+	pke_recover_msg_d2_ct_neon(c2, out, p_code, vec_bound);
+#elif LAC_CFG_CT_PKE_THRESHOLD_DEC
+	pke_recover_msg_d2_ct_scalar(c2, out, p_code, vec_bound);
+#else
+	pke_recover_msg_d2_std(c2, out, p_code, vec_bound);
+#endif
+}
 #endif
 
-static void LAC_ENC_UNUSED_FN pke_add_message_orig(lac_small_t *e2,
-						   const unsigned char *p_code,
-						   int c2_len)
+static void LAC_ENC_UNUSED_FN pke_add_message_std(lac_small_t *e2,
+						  const unsigned char *p_code,
+						  int c2_len)
 {
 	int i;
 
@@ -259,7 +344,10 @@ static void LAC_ENC_UNUSED_FN pke_add_message_ct_scalar(lac_small_t *e2,
 							const unsigned char *p_code,
 							int c2_len)
 {
-	pke_add_message_orig(e2, p_code, c2_len);
+	int i;
+
+	for(i=0;i<c2_len;i++)
+		e2[i]=e2[i]+RATIO*((p_code[i/8]>>(i%8))&1);
 }
 
 #if LAC_CFG_CT_NEON_PKE_MESSAGE_ADD
@@ -291,10 +379,23 @@ static void pke_add_message_ct_neon(lac_small_t *e2,
 }
 #endif
 
+static void pke_add_message(lac_small_t *e2,
+			    const unsigned char *p_code,
+			    int c2_len)
+{
+#if LAC_CFG_CT_NEON_PKE_MESSAGE_ADD
+	pke_add_message_ct_neon(e2, p_code, c2_len);
+#elif LAC_CFG_CT_PKE_MESSAGE_ADD
+	pke_add_message_ct_scalar(e2, p_code, c2_len);
+#else
+	pke_add_message_std(e2, p_code, c2_len);
+#endif
+}
+
 #ifdef LAC256
-static void LAC_ENC_UNUSED_FN pke_add_message_d2_orig(lac_small_t *e2,
-						      const unsigned char *p_code,
-						      int vec_bound)
+static void LAC_ENC_UNUSED_FN pke_add_message_d2_std(lac_small_t *e2,
+						     const unsigned char *p_code,
+						     int vec_bound)
 {
 	int i;
 
@@ -310,7 +411,14 @@ static void LAC_ENC_UNUSED_FN pke_add_message_d2_ct_scalar(lac_small_t *e2,
 							   const unsigned char *p_code,
 							   int vec_bound)
 {
-	pke_add_message_d2_orig(e2, p_code, vec_bound);
+	int i;
+
+	for(i=0;i<vec_bound;i++)
+	{
+		int8_t message=RATIO*((p_code[i/8]>>(i%8))&1);
+		e2[i]=e2[i]+message;
+		e2[i+vec_bound]=e2[i+vec_bound]+message;
+	}
 }
 
 #if LAC_CFG_CT_NEON_PKE_MESSAGE_ADD
@@ -341,6 +449,19 @@ static void pke_add_message_d2_ct_neon(lac_small_t *e2,
 	}
 }
 #endif
+
+static void pke_add_message_d2(lac_small_t *e2,
+			       const unsigned char *p_code,
+			       int vec_bound)
+{
+#if LAC_CFG_CT_NEON_PKE_MESSAGE_ADD
+	pke_add_message_d2_ct_neon(e2, p_code, vec_bound);
+#elif LAC_CFG_CT_PKE_MESSAGE_ADD
+	pke_add_message_d2_ct_scalar(e2, p_code, vec_bound);
+#else
+	pke_add_message_d2_std(e2, p_code, vec_bound);
+#endif
+}
 #endif
 
 //key generation
@@ -474,42 +595,7 @@ int pke_dec(const unsigned char *sk, const unsigned char *c,unsigned long long c
 	//c1*sk
 	poly_mul(c,(lac_small_t *)sk,out,DIM_N);
 	//compute c2-c1*sk and recover data from m*q/2+e
-#if LAC_CFG_CT_NEON_PKE_THRESHOLD_DEC
-	pke_recover_msg_d2_ct_neon(c2, out, p_code, vec_bound);
-#elif LAC_CFG_CT_PKE_THRESHOLD_DEC
-	pke_recover_msg_d2_ct_scalar(c2, out, p_code, vec_bound);
-#else
-	{
-	int i;
-	int temp1,temp2;
-	int center_point=Q/2;
-	int d2_bound=Q/2;
-	for(i=0;i<vec_bound;i++)
-	{
-		//D2 decoding:compute m*q/2+e1 + m*q/2+e2 in [0,2*Q]
-		temp1=enc_sub_mod_q_u8(c2[i], out[i]);
-		temp2=enc_sub_mod_q_u8(c2[i+vec_bound], out[i+vec_bound]);
-
-		//shift
-		if(temp1<center_point)
-		{
-			temp1=center_point-temp1+center_point;//mirror around Q/2
-		}
-		if(temp2<center_point)
-		{
-			temp2=center_point-temp2+center_point;//mirror around Q/2
-		}
-		//merge erors
-		temp1+=temp2-Q;
-
-		//recover m from m*q/2+e1 + m*q/2+e2, RATIO=q/2
-		if(temp1<d2_bound)
-		{
-			p_code[i/8]=p_code[i/8]^(1<<(i%8));
-		}
-	}
-	}
-#endif
+	pke_recover_msg_d2(c2, out, p_code, vec_bound);
 		//bch decode to recover m
 		ecc_dec(m_buf,code);
 		//get plaintext
@@ -529,29 +615,7 @@ int pke_dec(const unsigned char *sk, const unsigned char *c,unsigned long long c
 	//shift the pointer of code
 	p_code=code+(DATA_LEN-(*mlen));
 
-#if LAC_CFG_CT_NEON_PKE_THRESHOLD_DEC
-	pke_recover_msg_ct_neon(c2, out, p_code, c2_len);
-#elif LAC_CFG_CT_PKE_THRESHOLD_DEC
-	pke_recover_msg_ct_scalar(c2, out, p_code, c2_len);
-#else
-	{
-	int i;
-	int temp;
-	int low=Q/4;
-	int high=Q*3/4;
-	for(i=0;i<c2_len;i++)
-	{
-		//compute m*q/2+e in [0,Q]
-		temp=enc_sub_mod_q_u8(c2[i], out[i]);
-		
-		//recover m from m*q/2+e, RATIO=q/2
-		if(temp>=low && temp<high)
-		{
-			p_code[i/8]=p_code[i/8]^(1<<(i%8));
-		}
-	}
-	}
-#endif
+	pke_recover_msg(c2, out, p_code, c2_len);
 
 		//bch decode to recover m
 		ecc_dec(m_buf,code);
@@ -613,16 +677,10 @@ int pke_enc_seed(const unsigned char *pk, const unsigned char *m, unsigned long 
 	c2_len=(mlen+ECC_LEN)*8*2;
 	//generate error vector e2
 	gen_psi_std(e2,c2_len,seeds+2*SEED_LEN);
-	
+		
 	int vec_bound=c2_len/2;
 	//compute  code*q/2+e2,
-#if LAC_CFG_CT_NEON_PKE_MESSAGE_ADD
-	pke_add_message_d2_ct_neon(e2, p_code, vec_bound);
-#elif LAC_PROFILE_IS_CT
-	pke_add_message_d2_ct_scalar(e2, p_code, vec_bound);
-#else
-	pke_add_message_d2_orig(e2, p_code, vec_bound);
-#endif
+	pke_add_message_d2(e2, p_code, vec_bound);
 
 	#else
 	
@@ -631,13 +689,7 @@ int pke_enc_seed(const unsigned char *pk, const unsigned char *m, unsigned long 
 	//generate error vector e2
 	gen_psi_std(e2,c2_len,seeds+2*SEED_LEN);
 	//compute  code*q/2+e2,
-#if LAC_CFG_CT_NEON_PKE_MESSAGE_ADD
-	pke_add_message_ct_neon(e2, p_code, c2_len);
-#elif LAC_PROFILE_IS_CT
-	pke_add_message_ct_scalar(e2, p_code, c2_len);
-#else
-	pke_add_message_orig(e2, p_code, c2_len);
-#endif
+	pke_add_message(e2, p_code, c2_len);
 	#endif
 	//c2=b*r+e2+m*[q/2]
 	poly_aff(pk+SEED_LEN,r,e2,c2,c2_len);
