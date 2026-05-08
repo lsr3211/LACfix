@@ -4,7 +4,8 @@ objects = main.o test_correctness.o test_cpucycles.o test_speed.o \
 CC = gcc
 OPENSSL_PREFIX ?= /opt/homebrew/opt/openssl@3
 PROFILE ?= CT
-//默认CT，要切换就make PROFILE=STD
+# 默认 CT，要切换就 make PROFILE=STD 或 make PROFILE=CTNEON
+NEON ?= AUTO
 
 BASE_CFLAGS = -O3 -Wall -DNDEBUG -DLAC_SIGNED_CHAR -I$(OPENSSL_PREFIX)/include
 LDLIBS = -L$(OPENSSL_PREFIX)/lib -lcrypto -lz
@@ -13,12 +14,35 @@ ifeq ($(PROFILE),STD)
 PROFILE_CFLAGS = -DLAC_CONFIG_PROFILE=LAC_PROFILE_STD
 else ifeq ($(PROFILE),CT)
 PROFILE_CFLAGS = -DLAC_CONFIG_PROFILE=LAC_PROFILE_CT
+else ifeq ($(PROFILE),CTNEON)
+PROFILE_CFLAGS = -DLAC_CONFIG_PROFILE=LAC_PROFILE_CT_NEON
+else ifeq ($(PROFILE),CT_NEON)
+PROFILE_CFLAGS = -DLAC_CONFIG_PROFILE=LAC_PROFILE_CT_NEON
 else
-$(error Unsupported PROFILE '$(PROFILE)'. Use PROFILE=STD or PROFILE=CT)
+$(error Unsupported PROFILE '$(PROFILE)'. Use PROFILE=STD, PROFILE=CT, or PROFILE=CTNEON)
+endif
+
+ifeq ($(NEON),AUTO)
+ifeq ($(PROFILE),CTNEON)
+NEON_CFLAGS = -DLAC_CFG_CT_NEON=1
+else ifeq ($(PROFILE),CT_NEON)
+NEON_CFLAGS = -DLAC_CFG_CT_NEON=1
+else
+NEON_CFLAGS = -DLAC_CFG_CT_NEON=0
+endif
+else ifeq ($(NEON),ON)
+ifeq ($(PROFILE),STD)
+$(error NEON=ON requires PROFILE=CT or PROFILE=CTNEON)
+endif
+NEON_CFLAGS = -DLAC_CFG_CT_NEON=1
+else ifeq ($(NEON),OFF)
+NEON_CFLAGS = -DLAC_CFG_CT_NEON=0
+else
+$(error Unsupported NEON '$(NEON)'. Use NEON=AUTO, NEON=OFF, or NEON=ON)
 endif
 
 EXTRA_CFLAGS ?=
-CFLAGS = $(BASE_CFLAGS) $(PROFILE_CFLAGS) $(EXTRA_CFLAGS)
+CFLAGS = $(BASE_CFLAGS) $(PROFILE_CFLAGS) $(NEON_CFLAGS) $(EXTRA_CFLAGS)
 
 lac : $(objects)
 	$(CC) -o lac $(objects) $(LDLIBS)

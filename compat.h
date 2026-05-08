@@ -33,12 +33,14 @@ typedef char lac_small_t;
  * - 若未显式传入规范宏，则由 profile 自动给出默认值
  */
 
-/* ===== 第一层：STD / CT 两档总控 =====
+/* ===== 第一层：STD / CT / CT-NEON 三档总控 =====
  * LAC_PROFILE_STD: 标准/原始实现优先，CT 相关路径默认关闭
  * LAC_PROFILE_CT : 常数时间实现优先，CT 相关路径默认开启
+ * LAC_PROFILE_CT_NEON: 在 CT 基线上进一步启用 NEON 后端
  */
-#define LAC_PROFILE_STD 0
-#define LAC_PROFILE_CT  1
+#define LAC_PROFILE_STD      0
+#define LAC_PROFILE_CT       1
+#define LAC_PROFILE_CT_NEON  2
 
 /* 当前默认档位。
  * 若外部未指定，则默认使用 CT 档。 */
@@ -46,11 +48,19 @@ typedef char lac_small_t;
 #define LAC_CONFIG_PROFILE LAC_PROFILE_CT
 #endif
 
-/* 当前 profile 是否为 CT 档。后续默认值派生统一复用这个判断。 */
-#if LAC_CONFIG_PROFILE == LAC_PROFILE_CT
+/* 当前 profile 是否包含 CT 语义。CT-NEON 也继承 CT 基线。 */
+#if (LAC_CONFIG_PROFILE == LAC_PROFILE_CT) || \
+    (LAC_CONFIG_PROFILE == LAC_PROFILE_CT_NEON)
 #define LAC_PROFILE_IS_CT 1
 #else
 #define LAC_PROFILE_IS_CT 0
+#endif
+
+/* 当前 profile 是否为 CT-NEON 档。 */
+#if LAC_CONFIG_PROFILE == LAC_PROFILE_CT_NEON
+#define LAC_PROFILE_IS_CT_NEON 1
+#else
+#define LAC_PROFILE_IS_CT_NEON 0
 #endif
 
 /* ===== 第二层：规范配置宏 =====
@@ -119,6 +129,51 @@ typedef char lac_small_t;
 /* 控制 ecc_dec 的纠错写回是否使用固定迭代 + 掩码。 */
 #ifndef LAC_CFG_CT_ECC_CORRECT
 #define LAC_CFG_CT_ECC_CORRECT LAC_PROFILE_IS_CT
+#endif
+
+/* --- CT-NEON 配置 --- */
+
+/* 总控：允许在 CT 基线上切到 CT-NEON 后端。 */
+#ifndef LAC_CFG_CT_NEON
+#define LAC_CFG_CT_NEON LAC_PROFILE_IS_CT_NEON
+#endif
+
+/* 只有在打开 CT-NEON 且编译器/目标平台支持 NEON 时，才真正启用。 */
+#ifndef LAC_CFG_CT_NEON_AVAILABLE
+#if LAC_CFG_CT_NEON && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+#define LAC_CFG_CT_NEON_AVAILABLE 1
+#else
+#define LAC_CFG_CT_NEON_AVAILABLE 0
+#endif
+#endif
+
+/* bin-lwe 核心乘加路径：
+ * 这是当前最适合先做 CT-NEON 的热点。 */
+#ifndef LAC_CFG_CT_NEON_BINLWE_CORE
+#define LAC_CFG_CT_NEON_BINLWE_CORE LAC_CFG_CT_NEON_AVAILABLE
+#endif
+
+/* bin-lwe 打包/解包路径：
+ * 吞吐友好，适合作为第二批 CT-NEON 小改动。 */
+#ifndef LAC_CFG_CT_NEON_BINLWE_PACK
+#define LAC_CFG_CT_NEON_BINLWE_PACK LAC_CFG_CT_NEON_AVAILABLE
+#endif
+
+/* 兼容别名：保留之前的 SIMD 命名，避免后续小范围代码还没改完时断掉。 */
+#ifndef LAC_CFG_SIMD
+#define LAC_CFG_SIMD LAC_CFG_CT_NEON
+#endif
+
+#ifndef LAC_CFG_SIMD_NEON
+#define LAC_CFG_SIMD_NEON LAC_CFG_CT_NEON_AVAILABLE
+#endif
+
+#ifndef LAC_CFG_SIMD_BINLWE_CORE
+#define LAC_CFG_SIMD_BINLWE_CORE LAC_CFG_CT_NEON_BINLWE_CORE
+#endif
+
+#ifndef LAC_CFG_SIMD_BINLWE_PACK
+#define LAC_CFG_SIMD_BINLWE_PACK LAC_CFG_CT_NEON_BINLWE_PACK
 #endif
 
 /* ===== 修复类 / 安全卫生类开关 =====
