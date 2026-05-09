@@ -4,6 +4,17 @@
 #include "compat.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
+
+#if LAC_CFG_CT_NEON_AVAILABLE
+#include <arm_neon.h>
+#endif
+
+#if defined(__GNUC__) || defined(__clang__)
+#define LAC_ECC_UNUSED_FN __attribute__((unused))
+#else
+#define LAC_ECC_UNUSED_FN
+#endif
 
 #if defined(LAC128)
 //bch(511,256,61)
@@ -52,6 +63,98 @@ static inline uint32_t ecc_ct_mask_lt_u32(uint32_t a, uint32_t b)
 static inline uint32_t ecc_ct_mask_eq_u32(uint32_t a, uint32_t b)
 {
 	return ~ecc_ct_mask_nonzero_u32(a ^ b);
+}
+
+static void LAC_ECC_UNUSED_FN ecc_correct_std(unsigned char *data_buf,
+					      const unsigned int *error_loc,
+					      int error_num)
+{
+	int i;
+
+	if(error_num>0)
+	{
+		for (i=0;i<error_num;i++)
+		{
+			if(error_loc[i]<DATA_LEN*8)
+				data_buf[(error_loc[i])/8] ^= (1 << ((error_loc[i]) % 8));
+		}
+	}
+}
+
+static void LAC_ECC_UNUSED_FN ecc_correct_ct_scalar(unsigned char *data_buf,
+						    const unsigned int *error_loc,
+						    int error_num)
+{
+	int i;
+	uint32_t positive_mask = 0u - (uint32_t)(error_num > 0);
+	uint32_t err_u = ((uint32_t)error_num) & positive_mask;
+
+	for (i=0;i<MAX_ERROR;i++)
+	{
+		unsigned int j;
+		uint32_t mask_i = ecc_ct_mask_lt_u32((uint32_t)i, err_u);
+		uint32_t loc = error_loc[i];
+		uint32_t mask_data = ecc_ct_mask_lt_u32(loc, (uint32_t)(DATA_LEN*8));
+		uint32_t mask_apply = mask_i & mask_data;
+		uint32_t byte_idx = loc >> 3;
+		unsigned char bit = (unsigned char)(1u << (loc & 7u));
+
+		for (j=0;j<DATA_LEN;j++)
+		{
+			uint32_t byte_mask = mask_apply & ecc_ct_mask_eq_u32(j, byte_idx);
+			data_buf[j] ^= (unsigned char)(bit & (unsigned char)byte_mask);
+		}
+	}
+}
+
+#if LAC_CFG_CT_NEON_ECC_CORRECT
+static void ecc_correct_ct_neon(unsigned char *data_buf,
+				const unsigned int *error_loc,
+				int error_num)
+{
+	int i;
+	const uint8x16_t idx_lo = {
+		0, 1, 2, 3, 4, 5, 6, 7,
+		8, 9, 10, 11, 12, 13, 14, 15
+	};
+	const uint8x16_t idx_hi = {
+		16, 17, 18, 19, 20, 21, 22, 23,
+		24, 25, 26, 27, 28, 29, 30, 31
+	};
+	uint32_t positive_mask = 0u - (uint32_t)(error_num > 0);
+	uint32_t err_u = ((uint32_t)error_num) & positive_mask;
+
+	for (i=0;i<MAX_ERROR;i++)
+	{
+		uint32_t mask_i = ecc_ct_mask_lt_u32((uint32_t)i, err_u);
+		uint32_t loc = error_loc[i];
+		uint32_t mask_data = ecc_ct_mask_lt_u32(loc, (uint32_t)(DATA_LEN*8));
+		uint8_t apply = (uint8_t)(mask_i & mask_data);
+		uint8_t byte_idx = (uint8_t)(loc >> 3);
+		uint8_t bit = (uint8_t)(1u << (loc & 7u));
+		uint8x16_t byte_vec = vdupq_n_u8(byte_idx);
+		uint8x16_t bit_vec = vdupq_n_u8(bit);
+		uint8x16_t apply_vec = vdupq_n_u8(apply);
+		uint8x16_t delta_lo = vandq_u8(vandq_u8(vceqq_u8(idx_lo, byte_vec), apply_vec), bit_vec);
+		uint8x16_t delta_hi = vandq_u8(vandq_u8(vceqq_u8(idx_hi, byte_vec), apply_vec), bit_vec);
+
+		vst1q_u8(data_buf, veorq_u8(vld1q_u8(data_buf), delta_lo));
+		vst1q_u8(data_buf + 16, veorq_u8(vld1q_u8(data_buf + 16), delta_hi));
+	}
+}
+#endif
+
+static void ecc_correct(unsigned char *data_buf,
+			const unsigned int *error_loc,
+			int error_num)
+{
+#if LAC_CFG_CT_NEON_ECC_CORRECT
+	ecc_correct_ct_neon(data_buf, error_loc, error_num);
+#elif LAC_CFG_CT_ECC_CORRECT
+	ecc_correct_ct_scalar(data_buf, error_loc, error_num);
+#else
+	ecc_correct_std(data_buf, error_loc, error_num);
+#endif
 }
 
 static int ecc_workspace_ready = 0;
@@ -154,10 +257,9 @@ int ecc_dec(unsigned char *d, const unsigned char *c)
 	//test error without error correction 
 	#ifndef TEST_ROW_ERROR_RATE
 	int error_num=-1;
-		unsigned char ecc[ECCBUF_LEN];
-			unsigned char data_buf[DATABUF_LEN];
-			int i;
-			unsigned int error_loc[MAX_ERROR];
+				unsigned char ecc[ECCBUF_LEN];
+				unsigned char data_buf[DATABUF_LEN];
+				unsigned int error_loc[MAX_ERROR];
 			/*
 			 * 旧实现：在热路径里做懒初始化。
 			 * 现在改为程序启动阶段在 main() 中显式调用 ecc_init()。
@@ -178,40 +280,9 @@ int ecc_dec(unsigned char *d, const unsigned char *c)
 	memset(error_loc,0,sizeof(error_loc));
 	error_num=decode_bch(&ecc_bch,data_buf,DATA_LEN,ecc,NULL,NULL,error_loc);
 	//correct errors
-#if LAC_CFG_CT_ECC_CORRECT
-	{
-		uint32_t positive_mask = 0u - (uint32_t)(error_num > 0);
-		uint32_t err_u = ((uint32_t)error_num) & positive_mask;
-
-		for (i=0;i<MAX_ERROR;i++)
-		{
-			unsigned int j;
-			uint32_t mask_i = ecc_ct_mask_lt_u32((uint32_t)i, err_u);
-			uint32_t loc = error_loc[i];
-			uint32_t mask_data = ecc_ct_mask_lt_u32(loc, (uint32_t)(DATA_LEN*8));
-			uint32_t mask_apply = mask_i & mask_data;
-			uint32_t byte_idx = loc >> 3;
-			unsigned char bit = (unsigned char)(1u << (loc & 7u));
-
-			for (j=0;j<DATA_LEN;j++)
-			{
-				uint32_t byte_mask = mask_apply & ecc_ct_mask_eq_u32(j, byte_idx);
-				data_buf[j] ^= (unsigned char)(bit & (unsigned char)byte_mask);
-			}
-		}
-	}
-#else
-	if(error_num>0)
-    {
-		for (i=0;i<error_num;i++)
-        {
-			if(error_loc[i]<DATA_LEN*8)
-                data_buf[(error_loc[i])/8] ^= (1 << ((error_loc[i]) % 8));
-        }
-    }
-		#endif
-		//copy data to d
-		memcpy(d,data_buf,DATA_LEN);
+	ecc_correct(data_buf, error_loc, error_num);
+			//copy data to d
+			memcpy(d,data_buf,DATA_LEN);
 		LAC_SECURE_CLEAR(ecc, sizeof(ecc));
 		LAC_SECURE_CLEAR(data_buf, sizeof(data_buf));
 		LAC_SECURE_CLEAR(error_loc, sizeof(error_loc));

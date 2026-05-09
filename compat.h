@@ -137,6 +137,16 @@ typedef char lac_small_t;
 #define LAC_CFG_CT_ECC_CORRECT LAC_PROFILE_IS_CT
 #endif
 
+/* --- ecc.c CT-NEON 配置 --- */
+
+#ifndef LAC_CFG_CT_NEON_ECC
+#define LAC_CFG_CT_NEON_ECC LAC_CFG_CT_NEON_AVAILABLE
+#endif
+
+#ifndef LAC_CFG_CT_NEON_ECC_CORRECT
+#define LAC_CFG_CT_NEON_ECC_CORRECT LAC_CFG_CT_NEON_ECC
+#endif
+
 /* --- CT-NEON 配置 --- */
 
 /* 总控：允许在 CT 基线上切到 CT-NEON 后端。 */
@@ -197,6 +207,10 @@ typedef char lac_small_t;
 
 #ifndef LAC_CFG_SIMD_ENCRYPT
 #define LAC_CFG_SIMD_ENCRYPT LAC_CFG_CT_NEON_ENCRYPT
+#endif
+
+#ifndef LAC_CFG_SIMD_ECC
+#define LAC_CFG_SIMD_ECC LAC_CFG_CT_NEON_ECC
 #endif
 
 /* ===== 修复类 / 安全卫生类开关 =====
