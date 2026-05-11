@@ -24,3 +24,6 @@ int test_gen_a_cpucycles();
 
 //test polymul
 int test_poly_mul_cpucycles();
+
+//test bch module
+int test_bch_cpucycles();

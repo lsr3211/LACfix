@@ -82,4 +82,14 @@ int decode_bch(struct bch_control *bch, const uint8_t *data, unsigned int len,
 	       const uint8_t *recv_ecc, const uint8_t *calc_ecc,
 	       const unsigned int *syn, unsigned int *errloc);
 
+int decode_bch_pure_c(struct bch_control *bch, const uint8_t *data,
+		      unsigned int len, const uint8_t *recv_ecc,
+		      const uint8_t *calc_ecc, const unsigned int *syn,
+		      unsigned int *errloc);
+
+int decode_bch_ctneon(struct bch_control *bch, const uint8_t *data,
+		      unsigned int len, const uint8_t *recv_ecc,
+		      const uint8_t *calc_ecc, const unsigned int *syn,
+		      unsigned int *errloc);
+
 #endif /* _BCH_H */

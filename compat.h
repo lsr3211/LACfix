@@ -188,6 +188,34 @@ typedef char lac_small_t;
 #define LAC_CFG_CT_NEON_PKE_MESSAGE_ADD LAC_CFG_CT_NEON_ENCRYPT
 #endif
 
+/* bch.c 解码路径：在 CT 标量基线上启用 NEON 后端。 */
+#ifndef LAC_CFG_CT_NEON_BCH
+#define LAC_CFG_CT_NEON_BCH LAC_CFG_CT_NEON_AVAILABLE
+#endif
+
+#ifndef LAC_CFG_CT_NEON_BCH_SYNDROME
+#define LAC_CFG_CT_NEON_BCH_SYNDROME LAC_CFG_CT_NEON_BCH
+#endif
+
+#ifndef LAC_CFG_CT_NEON_BCH_ELP
+#define LAC_CFG_CT_NEON_BCH_ELP LAC_CFG_CT_NEON_BCH
+#endif
+
+#ifndef LAC_CFG_CT_NEON_BCH_CHIEN
+#define LAC_CFG_CT_NEON_BCH_CHIEN LAC_CFG_CT_NEON_BCH
+#endif
+
+#if !LAC_CFG_CT_NEON_AVAILABLE
+#undef LAC_CFG_CT_NEON_BCH
+#define LAC_CFG_CT_NEON_BCH 0
+#undef LAC_CFG_CT_NEON_BCH_SYNDROME
+#define LAC_CFG_CT_NEON_BCH_SYNDROME 0
+#undef LAC_CFG_CT_NEON_BCH_ELP
+#define LAC_CFG_CT_NEON_BCH_ELP 0
+#undef LAC_CFG_CT_NEON_BCH_CHIEN
+#define LAC_CFG_CT_NEON_BCH_CHIEN 0
+#endif
+
 /* 兼容别名：保留之前的 SIMD 命名，避免后续小范围代码还没改完时断掉。 */
 #ifndef LAC_CFG_SIMD
 #define LAC_CFG_SIMD LAC_CFG_CT_NEON
@@ -211,6 +239,14 @@ typedef char lac_small_t;
 
 #ifndef LAC_CFG_SIMD_ECC
 #define LAC_CFG_SIMD_ECC LAC_CFG_CT_NEON_ECC
+#endif
+
+#ifndef LAC_CFG_SIMD_BCH
+#define LAC_CFG_SIMD_BCH LAC_CFG_CT_NEON_BCH
+#endif
+
+#ifndef LAC_CFG_SIMD_BCH_ELP
+#define LAC_CFG_SIMD_BCH_ELP LAC_CFG_CT_NEON_BCH_ELP
 #endif
 
 /* ===== 修复类 / 安全卫生类开关 =====

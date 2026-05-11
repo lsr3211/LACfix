@@ -4,9 +4,20 @@
 #include "api.h"
 #include "rand.h"
 #include "ecc.h"
+#include "bch.h"
 #include "bin-lwe.h"
+#include "compat.h"
 
 #define NTESTS 10000
+#define BCH_NTESTS 1000
+
+#if LAC_CFG_CT_NEON_BCH
+#define BCH_SIMD_LABEL "CTNEON decode"
+#else
+#define BCH_SIMD_LABEL "SIMD decode (fallback)"
+#endif
+
+static volatile int bch_speed_sink;
 
 //test poly_nul
 int test_poly_mul_speed()
@@ -30,6 +41,61 @@ int test_poly_mul_speed()
     total_time=(double)(finish-start)/CLOCKS_PER_SEC;
     printf("poly_mul time    :%f us\n",(total_time*1000000/NTESTS));
 	
+	return 0;
+}
+
+int test_bch_speed()
+{
+	struct bch_control *bch;
+	clock_t start, finish;
+	double total_time;
+	unsigned char data[DATABUF_LEN];
+	unsigned char ecc[ECCBUF_LEN];
+	unsigned int errloc[MAX_ERROR];
+	int i, ret_pure, ret_simd;
+
+	bch = init_bch(LOG_CODE_LEN, MAX_ERROR, 0);
+	if (bch == NULL) {
+		printf("test bch decode time:\n");
+		printf("init_bch failed\n\n");
+		return -1;
+	}
+
+	memset(data, 0, sizeof(data));
+	memset(ecc, 0, sizeof(ecc));
+	random_bytes(data, DATA_LEN);
+	encode_bch(bch, data, DATA_LEN, ecc);
+	data[0] ^= 0x01;
+
+	start = clock();
+	for (i = 0; i < BCH_NTESTS; i++) {
+		memset(errloc, 0, sizeof(errloc));
+		ret_pure = decode_bch_pure_c(bch, data, DATA_LEN, ecc, NULL,
+					     NULL, errloc);
+		bch_speed_sink ^= ret_pure ^ (int)errloc[0];
+	}
+	finish = clock();
+	total_time = (double)(finish-start)/CLOCKS_PER_SEC;
+
+	printf("test bch decode time:\n");
+	printf("pure C decode :%f us\n",
+	       (total_time*1000000)/BCH_NTESTS);
+
+	start = clock();
+	for (i = 0; i < BCH_NTESTS; i++) {
+		memset(errloc, 0, sizeof(errloc));
+		ret_simd = decode_bch_ctneon(bch, data, DATA_LEN, ecc, NULL,
+					     NULL, errloc);
+		bch_speed_sink ^= ret_simd ^ (int)errloc[0];
+	}
+	finish = clock();
+	total_time = (double)(finish-start)/CLOCKS_PER_SEC;
+	printf("%s :%f us\n", BCH_SIMD_LABEL,
+	       (total_time*1000000)/BCH_NTESTS);
+	printf("last ret pure/simd: %d/%d\n", ret_pure, ret_simd);
+	printf("\n");
+
+	free_bch(bch);
 	return 0;
 }
 

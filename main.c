@@ -30,10 +30,12 @@ int main(int argc, char **argv)
         printf("  ./lac cpucycles_ake\n");
         printf("  ./lac cpucycles_gena\n");
         printf("  ./lac cpucycles_genpsi\n");
-        printf("  ./lac cpucycles_polymul\n");
-        printf("  ./lac cpucycles_hash\n");
-        printf("  ./lac cpucycles_aes\n"); 
+		printf("  ./lac cpucycles_polymul\n");
+		printf("  ./lac cpucycles_bch\n");
+		printf("  ./lac cpucycles_hash\n");
+		printf("  ./lac cpucycles_aes\n"); 
 		printf("  ./lac cpucycles_polyaff\n"); //new fix
+		printf("  ./lac speed_bch\n");
 
 		printf("lac correctness: test the correctness of lac\n");
 		printf("lac basicblock: test the speed of basic blocks used in lac\n");
@@ -46,7 +48,8 @@ int main(int argc, char **argv)
 			test_pke_speed();
 			test_kem_fo_speed();
 			test_ke_speed();
-			test_ake_speed();	
+			test_ake_speed();
+			test_bch_speed();
 		}
 		
 		if(strcmp(argv[1],"cpucycles")==0)
@@ -84,6 +87,10 @@ int main(int argc, char **argv)
 		{
 			 test_poly_mul_cpucycles();
 			}
+		else if(strcmp(argv[1],"cpucycles_bch")==0)
+		{
+			 test_bch_cpucycles();
+			}
         else if(strcmp(argv[1],"cpucycles_hash")==0)
 		{
              test_hash_cpucycles();
@@ -95,6 +102,10 @@ int main(int argc, char **argv)
 		else if(strcmp(argv[1], "cpucycles_polyaff") == 0)
 		{
             test_poly_aff_cpucycles();
+          }
+		else if(strcmp(argv[1], "speed_bch") == 0)
+		{
+            test_bch_speed();
           }
 		
 		if(strcmp(argv[1],"correctness")==0)
@@ -113,6 +124,8 @@ int main(int argc, char **argv)
 			test_gen_a_cpucycles();
 			test_poly_mul_cpucycles();
 			test_poly_mul_speed();
+			test_bch_cpucycles();
+			test_bch_speed();
 		}
 		printf("============================================\n");
 	}

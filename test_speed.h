@@ -4,6 +4,9 @@ int test_poly_mul_speed();
 //test pke
 int test_pke_speed();
 
+//test bch module
+int test_bch_speed();
+
 //test kem fo
 int test_kem_fo_speed();
 

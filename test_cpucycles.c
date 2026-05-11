@@ -11,11 +11,22 @@
 #include "api.h"
 #include "rand.h"
 #include "ecc.h"
+#include "bch.h"
 #include "bin-lwe.h"
+#include "compat.h"
 
 
 
 #define NTESTS 10000
+#define BCH_NTESTS 1000
+
+#if LAC_CFG_CT_NEON_BCH
+#define BCH_SIMD_LABEL "CTNEON decode"
+#else
+#define BCH_SIMD_LABEL "SIMD decode (fallback)"
+#endif
+
+static volatile int bch_bench_sink;
 
 #if defined(__x86_64__) || defined(__i386__)
 #define cpucycles() __rdtsc()
@@ -352,6 +363,71 @@ int test_poly_mul_cpucycles()
 	printf("cpucycles: %f \n",(sum)/((double)loop));
 	printf("\n");
 	
+	return 0;
+}
+
+int test_bch_cpucycles()
+{
+	struct bch_control *bch;
+	unsigned char data[DATABUF_LEN];
+	unsigned char ecc[ECCBUF_LEN];
+	unsigned int errloc[MAX_ERROR];
+	uint64_t t0, t1, sum_pure, sum_simd;
+	int i, ret_pure, ret_simd;
+
+	bch = init_bch(LOG_CODE_LEN, MAX_ERROR, 0);
+	if (bch == NULL) {
+		printf("test bch decode cpucycles:\n");
+		printf("init_bch failed\n\n");
+		return -1;
+	}
+
+	memset(data, 0, sizeof(data));
+	memset(ecc, 0, sizeof(ecc));
+	random_bytes(data, DATA_LEN);
+	encode_bch(bch, data, DATA_LEN, ecc);
+	data[0] ^= 0x01;
+
+	memset(errloc, 0, sizeof(errloc));
+	ret_pure = decode_bch_pure_c(bch, data, DATA_LEN, ecc, NULL, NULL,
+				     errloc);
+	bch_bench_sink = ret_pure ^ (int)errloc[0];
+	memset(errloc, 0, sizeof(errloc));
+	ret_simd = decode_bch_ctneon(bch, data, DATA_LEN, ecc, NULL, NULL,
+				     errloc);
+	bch_bench_sink ^= ret_simd ^ (int)errloc[0];
+
+	sum_pure = 0;
+	for (i = 0; i < BCH_NTESTS; i++) {
+		memset(errloc, 0, sizeof(errloc));
+		t0 = cpucycles();
+		ret_pure = decode_bch_pure_c(bch, data, DATA_LEN, ecc, NULL,
+					     NULL, errloc);
+		t1 = cpucycles();
+		sum_pure += t1 - t0;
+		bch_bench_sink ^= ret_pure ^ (int)errloc[0];
+	}
+
+	sum_simd = 0;
+	for (i = 0; i < BCH_NTESTS; i++) {
+		memset(errloc, 0, sizeof(errloc));
+		t0 = cpucycles();
+		ret_simd = decode_bch_ctneon(bch, data, DATA_LEN, ecc, NULL,
+					     NULL, errloc);
+		t1 = cpucycles();
+		sum_simd += t1 - t0;
+		bch_bench_sink ^= ret_simd ^ (int)errloc[0];
+	}
+
+	printf("test bch decode cpucycles:\n");
+	printf("pure C decode : %f cpucycles\n",
+	       sum_pure / ((double)BCH_NTESTS));
+	printf("%s : %f cpucycles\n", BCH_SIMD_LABEL,
+	       sum_simd / ((double)BCH_NTESTS));
+	printf("last ret pure/simd: %d/%d\n", ret_pure, ret_simd);
+	printf("\n");
+
+	free_bch(bch);
 	return 0;
 }
 
