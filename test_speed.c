@@ -52,7 +52,7 @@ int test_bch_speed()
 	unsigned char data[DATABUF_LEN];
 	unsigned char ecc[ECCBUF_LEN];
 	unsigned int errloc[MAX_ERROR];
-	int i, ret_pure, ret_simd;
+	int i, ret_pure, ret_ct, ret_simd;
 
 	bch = init_bch(LOG_CODE_LEN, MAX_ERROR, 0);
 	if (bch == NULL) {
@@ -84,6 +84,18 @@ int test_bch_speed()
 	start = clock();
 	for (i = 0; i < BCH_NTESTS; i++) {
 		memset(errloc, 0, sizeof(errloc));
+		ret_ct = decode_bch_ct_scalar(bch, data, DATA_LEN, ecc, NULL,
+					      NULL, errloc);
+		bch_speed_sink ^= ret_ct ^ (int)errloc[0];
+	}
+	finish = clock();
+	total_time = (double)(finish-start)/CLOCKS_PER_SEC;
+	printf("CT scalar decode :%f us\n",
+	       (total_time*1000000)/BCH_NTESTS);
+
+	start = clock();
+	for (i = 0; i < BCH_NTESTS; i++) {
+		memset(errloc, 0, sizeof(errloc));
 		ret_simd = decode_bch_ctneon(bch, data, DATA_LEN, ecc, NULL,
 					     NULL, errloc);
 		bch_speed_sink ^= ret_simd ^ (int)errloc[0];
@@ -92,7 +104,8 @@ int test_bch_speed()
 	total_time = (double)(finish-start)/CLOCKS_PER_SEC;
 	printf("%s :%f us\n", BCH_SIMD_LABEL,
 	       (total_time*1000000)/BCH_NTESTS);
-	printf("last ret pure/simd: %d/%d\n", ret_pure, ret_simd);
+	printf("last ret pure/ct/simd: %d/%d/%d\n", ret_pure, ret_ct,
+	       ret_simd);
 	printf("\n");
 
 	free_bch(bch);

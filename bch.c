@@ -374,43 +374,22 @@ static unsigned int BCH_STD_UNUSED syndrome_a_pow_ct(struct bch_control *bch,
 }
 
 #if LAC_CFG_CT_NEON_BCH_SYNDROME || LAC_CFG_CT_NEON_BCH_CHIEN
-static uint32x4_t syndrome_a_pow4_ct_neon(struct bch_control *bch,
-					  int e0, int e1, int e2, int e3)
+/*
+ * Public-exponent a^i helper for syndrome and Chien-search positions.
+ * Do not use this for indices derived from syndrome values, ELP coefficients,
+ * or other secret-dependent field elements.
+ */
+static uint32x4_t a_pow4_public_neon(struct bch_control *bch,
+				     int e0, int e1, int e2, int e3)
 {
-	unsigned int idx0 = (unsigned int)modulo(bch, e0);
-	unsigned int idx1 = (unsigned int)modulo(bch, e1);
-	unsigned int idx2 = (unsigned int)modulo(bch, e2);
-	unsigned int idx3 = (unsigned int)modulo(bch, e3);
-	uint32x4_t idx_vec = { idx0, idx1, idx2, idx3 };
-	uint32x4_t out = vdupq_n_u32(0);
-	unsigned int k;
+	uint32_t out[4];
 
-	for (k = 0; k <= GF_N(bch); k += 4) {
-		uint32x4_t tab = vmovl_u16(vld1_u16(bch->a_pow_tab + k));
-		uint32x4_t tab0 = vdupq_n_u32(vgetq_lane_u32(tab, 0));
-		uint32x4_t tab1 = vdupq_n_u32(vgetq_lane_u32(tab, 1));
-		uint32x4_t tab2 = vdupq_n_u32(vgetq_lane_u32(tab, 2));
-		uint32x4_t tab3 = vdupq_n_u32(vgetq_lane_u32(tab, 3));
+	out[0] = bch->a_pow_tab[modulo(bch, e0)];
+	out[1] = bch->a_pow_tab[modulo(bch, e1)];
+	out[2] = bch->a_pow_tab[modulo(bch, e2)];
+	out[3] = bch->a_pow_tab[modulo(bch, e3)];
 
-		out = vorrq_u32(out,
-				 vandq_u32(tab0,
-					   vceqq_u32(idx_vec,
-						     vdupq_n_u32(k))));
-		out = vorrq_u32(out,
-				 vandq_u32(tab1,
-					   vceqq_u32(idx_vec,
-						     vdupq_n_u32(k + 1))));
-		out = vorrq_u32(out,
-				 vandq_u32(tab2,
-					   vceqq_u32(idx_vec,
-						     vdupq_n_u32(k + 2))));
-		out = vorrq_u32(out,
-				 vandq_u32(tab3,
-					   vceqq_u32(idx_vec,
-						     vdupq_n_u32(k + 3))));
-	}
-
-	return out;
+	return vld1q_u32(out);
 }
 
 #if LAC_CFG_CT_NEON_BCH_SYNDROME
@@ -438,8 +417,8 @@ static void syndrome_accum_even4_ct_neon(struct bch_control *bch,
 	}
 
 	cur = vld1q_u32(cur_buf);
-	add = syndrome_a_pow4_ct_neon(bch, exp_buf[0], exp_buf[1],
-				      exp_buf[2], exp_buf[3]);
+	add = a_pow4_public_neon(bch, exp_buf[0], exp_buf[1],
+				 exp_buf[2], exp_buf[3]);
 	add = vandq_u32(add, vandq_u32(vdupq_n_u32(bit_mask),
 				       vld1q_u32(valid_buf)));
 	vst1q_u32(cur_buf, veorq_u32(cur, add));
@@ -775,24 +754,6 @@ static uint32x4_t ct_gf_div4(struct bch_control *bch, uint32x4_t a,
 	return vandq_u32(ct_gf_mul4(bch, a, ct_gf_inv4(bch, b)), nonzero);
 }
 
-static uint32x4_t ct_select_syn4_neon(const unsigned int *syn,
-				      unsigned int n,
-				      uint32x4_t idx_vec,
-				      uint32x4_t valid_mask)
-{
-	unsigned int i;
-	uint32x4_t out = vdupq_n_u32(0);
-
-	for (i = 0; i < n; i++) {
-		uint32x4_t mask = vandq_u32(valid_mask,
-					    vceqq_u32(idx_vec,
-						      vdupq_n_u32(i)));
-
-		out = vbslq_u32(mask, vdupq_n_u32(syn[i]), out);
-	}
-
-	return out;
-}
 #endif
 
 static unsigned int ct_gf_sqr(struct bch_control *bch, unsigned int a)
@@ -1086,87 +1047,87 @@ static int compute_error_locator_polynomial_ct_neon(struct bch_control *bch,
 				     vdupq_n_u32(old_pd)));
 		scale = scale_buf[0];
 
-		for (j = 0; j <= t; j += 4) {
-			unsigned int lane, u;
-			uint32_t coeff_buf[4] = { 0, 0, 0, 0 };
-			uint32_t idx_buf[4] = { 0, 0, 0, 0 };
-			uint32_t use_buf[4] = { 0, 0, 0, 0 };
-			uint32_t addv_buf[4];
-			uint32x4_t addv_vec;
+			for (j = 0; j <= t; j += 4) {
+				unsigned int lane, u;
+				uint32_t coeff_buf[4] = { 0, 0, 0, 0 };
+				uint32_t idx_buf[4] = { 0, 0, 0, 0 };
+				uint32_t use_buf[4] = { 0, 0, 0, 0 };
+				uint32_t addv_buf[4];
+				uint32x4_t addv_vec;
 
-			for (lane = 0; lane < 4; lane++) {
-				unsigned int jj = j + lane;
-				int idx = (int)jj + k;
-				uint32_t idx_u32 = (uint32_t)idx;
-				uint32_t lane_active = ct_mask_le_u32(jj, t);
+				for (lane = 0; lane < 4; lane++) {
+					unsigned int jj = j + lane;
+					int idx = (int)jj + k;
+					uint32_t idx_u32 = (uint32_t)idx;
+					uint32_t lane_active = ct_mask_le_u32(jj, t);
 
-				idx_buf[lane] = idx_u32;
-				coeff_buf[lane] = pelp->c[jj & lane_active];
-				use_buf[lane] = mask_d & lane_active &
-					ct_mask_le_u32(jj, old_pelp_deg) &
-					ct_mask_nonzero_u32(coeff_buf[lane]) &
-					(0u - (uint32_t)(idx >= 0)) &
-					ct_mask_le_u32(idx_u32, t);
+					idx_buf[lane] = idx_u32;
+					coeff_buf[lane] = pelp->c[jj & lane_active];
+					use_buf[lane] = mask_d & lane_active &
+						ct_mask_le_u32(jj, old_pelp_deg) &
+						ct_mask_nonzero_u32(coeff_buf[lane]) &
+						(0u - (uint32_t)(idx >= 0)) &
+						ct_mask_le_u32(idx_u32, t);
+				}
+				addv_vec = ct_gf_mul4(bch, vdupq_n_u32(scale),
+						      vld1q_u32(coeff_buf));
+				vst1q_u32(addv_buf, addv_vec);
+
+				for (u = 0; u + 3 <= t; u += 4) {
+					uint32x4_t u_vec = vaddq_u32(vdupq_n_u32(u),
+								     lane_step);
+					uint32x4_t c_vec = vld1q_u32(elp->c + u);
+					uint32x4_t delta = vdupq_n_u32(0);
+
+					for (lane = 0; lane < 4; lane++) {
+						uint32x4_t lane_delta =
+							vandq_u32(vdupq_n_u32(addv_buf[lane]),
+								  vandq_u32(vdupq_n_u32(use_buf[lane]),
+									    vceqq_u32(u_vec,
+										      vdupq_n_u32(idx_buf[lane]))));
+
+						delta = veorq_u32(delta, lane_delta);
+					}
+
+					vst1q_u32(elp->c + u, veorq_u32(c_vec, delta));
+				}
+				if (u <= t) {
+					uint32_t c_buf[4] = { 0, 0, 0, 0 };
+					uint32_t u_buf[4];
+					uint32_t valid_buf[4];
+					uint32x4_t u_vec;
+					uint32x4_t c_vec;
+					uint32x4_t delta = vdupq_n_u32(0);
+
+					for (lane = 0; lane < 4; lane++) {
+						unsigned int uu = u + lane;
+
+						u_buf[lane] = uu;
+						valid_buf[lane] = ct_mask_le_u32(uu, t);
+						c_buf[lane] = elp->c[uu & valid_buf[lane]];
+					}
+					u_vec = vld1q_u32(u_buf);
+					c_vec = vld1q_u32(c_buf);
+					for (lane = 0; lane < 4; lane++) {
+						uint32x4_t lane_delta =
+							vandq_u32(vdupq_n_u32(addv_buf[lane]),
+								  vandq_u32(vdupq_n_u32(use_buf[lane]),
+									    vceqq_u32(u_vec,
+										      vdupq_n_u32(idx_buf[lane]))));
+
+						delta = veorq_u32(delta, lane_delta);
+					}
+					c_vec = veorq_u32(c_vec, vandq_u32(delta,
+									   vld1q_u32(valid_buf)));
+					vst1q_u32(c_buf, c_vec);
+					for (lane = 0; lane < 4; lane++) {
+						unsigned int uu = u + lane;
+
+						if (uu <= t)
+							elp->c[uu] = c_buf[lane];
+					}
+				}
 			}
-			addv_vec = ct_gf_mul4(bch, vdupq_n_u32(scale),
-					      vld1q_u32(coeff_buf));
-			vst1q_u32(addv_buf, addv_vec);
-
-			for (u = 0; u + 3 <= t; u += 4) {
-				uint32x4_t u_vec = vaddq_u32(vdupq_n_u32(u),
-							     lane_step);
-				uint32x4_t c_vec = vld1q_u32(elp->c + u);
-				uint32x4_t delta = vdupq_n_u32(0);
-
-				for (lane = 0; lane < 4; lane++) {
-					uint32x4_t lane_delta =
-						vandq_u32(vdupq_n_u32(addv_buf[lane]),
-							  vandq_u32(vdupq_n_u32(use_buf[lane]),
-								    vceqq_u32(u_vec,
-									      vdupq_n_u32(idx_buf[lane]))));
-
-					delta = veorq_u32(delta, lane_delta);
-				}
-
-				vst1q_u32(elp->c + u, veorq_u32(c_vec, delta));
-			}
-			if (u <= t) {
-				uint32_t c_buf[4] = { 0, 0, 0, 0 };
-				uint32_t u_buf[4];
-				uint32_t valid_buf[4];
-				uint32x4_t u_vec;
-				uint32x4_t c_vec;
-				uint32x4_t delta = vdupq_n_u32(0);
-
-				for (lane = 0; lane < 4; lane++) {
-					unsigned int uu = u + lane;
-
-					u_buf[lane] = uu;
-					valid_buf[lane] = ct_mask_le_u32(uu, t);
-					c_buf[lane] = elp->c[uu & valid_buf[lane]];
-				}
-				u_vec = vld1q_u32(u_buf);
-				c_vec = vld1q_u32(c_buf);
-				for (lane = 0; lane < 4; lane++) {
-					uint32x4_t lane_delta =
-						vandq_u32(vdupq_n_u32(addv_buf[lane]),
-							  vandq_u32(vdupq_n_u32(use_buf[lane]),
-								    vceqq_u32(u_vec,
-									      vdupq_n_u32(idx_buf[lane]))));
-
-					delta = veorq_u32(delta, lane_delta);
-				}
-				c_vec = veorq_u32(c_vec, vandq_u32(delta,
-								   vld1q_u32(valid_buf)));
-				vst1q_u32(c_buf, c_vec);
-				for (lane = 0; lane < 4; lane++) {
-					unsigned int uu = u + lane;
-
-					if (uu <= t)
-						elp->c[uu] = c_buf[lane];
-				}
-			}
-		}
 
 		cand_deg = old_pelp_deg + (k_u32 & mask_k_nonneg);
 		mask_update = mask_d & mask_k_nonneg &
@@ -1183,31 +1144,28 @@ static int compute_error_locator_polynomial_ct_neon(struct bch_control *bch,
 
 			for (j = 1; j <= t; j += 4) {
 				unsigned int lane;
-				uint32_t sidx_buf[4];
 				uint32_t mask_buf[4];
 				uint32x4_t prod_vec;
 				uint32x4_t mask_vec;
-				uint32x4_t synv_vec;
+				uint32_t synv_buf[4] = { 0, 0, 0, 0 };
 				uint32_t coeff_buf[4] = { 0, 0, 0, 0 };
 
 				for (lane = 0; lane < 4; lane++) {
 					unsigned int jj = j + lane;
-					unsigned int sidx = sidx_base - jj;
 					uint32_t lane_active = ct_mask_le_u32(jj, t);
+					uint32_t syn_in_range = ct_mask_le_u32(jj, sidx_base);
 					uint32_t mask_use =
 						lane_active &
 						ct_mask_le_u32(jj, elp->deg) &
-						ct_mask_le_u32(jj, sidx_base);
+						syn_in_range;
 
-					sidx_buf[lane] = sidx;
 					mask_buf[lane] = mask_use;
 					coeff_buf[lane] = elp->c[jj & lane_active];
+					if (jj <= sidx_base)
+						synv_buf[lane] = syn[sidx_base - jj];
 				}
-				synv_vec = ct_select_syn4_neon(syn, 2*t,
-							       vld1q_u32(sidx_buf),
-							       vld1q_u32(mask_buf));
 				prod_vec = ct_gf_mul4(bch, vld1q_u32(coeff_buf),
-						      synv_vec);
+						      vld1q_u32(synv_buf));
 				mask_vec = vld1q_u32(mask_buf);
 				acc_vec = veorq_u32(acc_vec,
 						    vandq_u32(prod_vec, mask_vec));
@@ -1755,6 +1713,9 @@ static int chien_search_ct_neon(struct bch_control *bch, unsigned int len,
 	const unsigned int bound = GF_N(bch);
 	const unsigned int search_len = bound-start+1;
 	const uint32x4_t lane_step = { 0, 1, 2, 3 };
+	const uint32x4_t x_step = vdupq_n_u32(a_pow(bch, 4));
+	uint32x4_t x_vec = a_pow4_public_neon(bch, start, start+1,
+					      start+2, start+3);
 
 	for (j = 0; j < bch->t; j++)
 		roots[j] = 0;
@@ -1763,12 +1724,6 @@ static int chien_search_ct_neon(struct bch_control *bch, unsigned int len,
 		uint32x4_t lane_idx = vaddq_u32(vdupq_n_u32(i), lane_step);
 		uint32x4_t pos_vec = vaddq_u32(vdupq_n_u32(start), lane_idx);
 		uint32x4_t valid_vec = vcltq_u32(lane_idx, vdupq_n_u32(search_len));
-		uint32x4_t x_vec = syndrome_a_pow4_ct_neon(
-			bch,
-			(int)(start+i),
-			(int)(start+i+1),
-			(int)(start+i+2),
-			(int)(start+i+3));
 		uint32x4_t syn_vec = vdupq_n_u32(0);
 		uint32_t root_flags[4];
 		uint32_t root_vals[4];
@@ -1799,6 +1754,7 @@ static int chien_search_ct_neon(struct bch_control *bch, unsigned int len,
 			}
 			count += root_flag;
 		}
+		x_vec = ct_gf_mul4(bch, x_vec, x_step);
 	}
 
 	return (int)count;
@@ -2034,6 +1990,85 @@ int decode_bch_pure_c(struct bch_control *bch, const uint8_t *data,
 }
 EXPORT_SYMBOL_GPL(decode_bch_pure_c);
 
+int decode_bch_ct_scalar(struct bch_control *bch, const uint8_t *data,
+			 unsigned int len, const uint8_t *recv_ecc,
+			 const uint8_t *calc_ecc, const unsigned int *syn,
+			 unsigned int *errloc)
+{
+#if LAC_CFG_CT_BCH
+	const unsigned int ecc_words = BCH_ECC_WORDS(bch);
+	unsigned int nbits;
+	int i, err, nroots;
+	uint32_t sum;
+
+	if (8*len > (bch->n-bch->ecc_bits))
+		return -EINVAL;
+
+	if (!syn) {
+		if (!calc_ecc) {
+			if (!data || !recv_ecc)
+				return -EINVAL;
+			compute_syndromes_data_ecc_ct(bch, data, len, recv_ecc,
+						      bch->syn);
+			syn = bch->syn;
+			goto have_syndromes;
+		}
+		load_ecc8(bch, bch->ecc_buf, calc_ecc);
+		if (recv_ecc) {
+			load_ecc8(bch, bch->ecc_buf2, recv_ecc);
+			for (i = 0, sum = 0; i < (int)ecc_words; i++) {
+				bch->ecc_buf[i] ^= bch->ecc_buf2[i];
+				sum |= bch->ecc_buf[i];
+			}
+			(void)sum;
+		}
+		compute_syndromes_ct(bch, bch->ecc_buf, bch->syn);
+		syn = bch->syn;
+	}
+
+have_syndromes:
+	err = compute_error_locator_polynomial_ct(bch, syn);
+	nroots = chien_search_ct(bch, len, bch->elp, errloc);
+	{
+		uint32_t mask_err_pos = 0u - (uint32_t)(err > 0);
+		uint32_t mask_err_zero = 0u - (uint32_t)(err == 0);
+		uint32_t fail = 0;
+
+		fail |= mask_err_pos &
+			ct_mask_nonzero_u32((uint32_t)err ^ (uint32_t)nroots);
+		fail |= mask_err_zero & ct_mask_nonzero_u32((uint32_t)nroots);
+		fail |= 0u - (uint32_t)(err < 0);
+		err = ct_select_int(ct_mask_nonzero_u32(fail), -1, err);
+	}
+
+	nbits = (len*8)+bch->ecc_bits;
+	{
+		uint32_t invalid = 0;
+		uint32_t mask_err_pos = 0u - (uint32_t)(err > 0);
+		unsigned int err_u = (unsigned int)err;
+
+		for (i = 0; i < (int)bch->t; i++) {
+			uint32_t mask_valid = mask_err_pos &
+				ct_mask_lt_u32((unsigned int)i, err_u);
+			uint32_t mask_in_range = ct_mask_lt_u32(errloc[i], nbits);
+			unsigned int loc = nbits-1-errloc[i];
+
+			loc = (loc & ~7)|(7-(loc & 7));
+			errloc[i] = ct_select_u32(mask_valid, loc, errloc[i]);
+			invalid |= mask_valid & ~mask_in_range;
+		}
+		err = ct_select_int(ct_mask_nonzero_u32(invalid), -1, err);
+	}
+	{
+		uint32_t ok_mask = ~((uint32_t)err >> 31);
+		return ct_select_int(ok_mask, err, -EBADMSG);
+	}
+#else
+	return decode_bch(bch, data, len, recv_ecc, calc_ecc, syn, errloc);
+#endif
+}
+EXPORT_SYMBOL_GPL(decode_bch_ct_scalar);
+
 int decode_bch_ctneon(struct bch_control *bch, const uint8_t *data,
 		      unsigned int len, const uint8_t *recv_ecc,
 		      const uint8_t *calc_ecc, const unsigned int *syn,
@@ -2077,9 +2112,11 @@ have_syndromes:
 		uint32_t mask_err_zero = 0u - (uint32_t)(err == 0);
 		uint32_t mask_mismatch = mask_err_pos &
 			(0u - (uint32_t)(nroots != err));
+		uint32_t mask_err_neg = 0u - (uint32_t)(err < 0);
 		int selected = ct_select_int(mask_err_zero, 0, nroots);
 
 		selected = ct_select_int(mask_mismatch, -EBADMSG, selected);
+		selected = ct_select_int(mask_err_neg, -EBADMSG, selected);
 		err = selected;
 	}
 	if (err > 0) {

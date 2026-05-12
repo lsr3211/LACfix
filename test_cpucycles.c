@@ -372,8 +372,8 @@ int test_bch_cpucycles()
 	unsigned char data[DATABUF_LEN];
 	unsigned char ecc[ECCBUF_LEN];
 	unsigned int errloc[MAX_ERROR];
-	uint64_t t0, t1, sum_pure, sum_simd;
-	int i, ret_pure, ret_simd;
+	uint64_t t0, t1, sum_pure, sum_ct, sum_simd;
+	int i, ret_pure, ret_ct, ret_simd;
 
 	bch = init_bch(LOG_CODE_LEN, MAX_ERROR, 0);
 	if (bch == NULL) {
@@ -396,6 +396,10 @@ int test_bch_cpucycles()
 	ret_simd = decode_bch_ctneon(bch, data, DATA_LEN, ecc, NULL, NULL,
 				     errloc);
 	bch_bench_sink ^= ret_simd ^ (int)errloc[0];
+	memset(errloc, 0, sizeof(errloc));
+	ret_ct = decode_bch_ct_scalar(bch, data, DATA_LEN, ecc, NULL, NULL,
+				      errloc);
+	bch_bench_sink ^= ret_ct ^ (int)errloc[0];
 
 	sum_pure = 0;
 	for (i = 0; i < BCH_NTESTS; i++) {
@@ -406,6 +410,17 @@ int test_bch_cpucycles()
 		t1 = cpucycles();
 		sum_pure += t1 - t0;
 		bch_bench_sink ^= ret_pure ^ (int)errloc[0];
+	}
+
+	sum_ct = 0;
+	for (i = 0; i < BCH_NTESTS; i++) {
+		memset(errloc, 0, sizeof(errloc));
+		t0 = cpucycles();
+		ret_ct = decode_bch_ct_scalar(bch, data, DATA_LEN, ecc, NULL,
+					      NULL, errloc);
+		t1 = cpucycles();
+		sum_ct += t1 - t0;
+		bch_bench_sink ^= ret_ct ^ (int)errloc[0];
 	}
 
 	sum_simd = 0;
@@ -422,9 +437,12 @@ int test_bch_cpucycles()
 	printf("test bch decode cpucycles:\n");
 	printf("pure C decode : %f cpucycles\n",
 	       sum_pure / ((double)BCH_NTESTS));
+	printf("CT scalar decode : %f cpucycles\n",
+	       sum_ct / ((double)BCH_NTESTS));
 	printf("%s : %f cpucycles\n", BCH_SIMD_LABEL,
 	       sum_simd / ((double)BCH_NTESTS));
-	printf("last ret pure/simd: %d/%d\n", ret_pure, ret_simd);
+	printf("last ret pure/ct/simd: %d/%d/%d\n", ret_pure, ret_ct,
+	       ret_simd);
 	printf("\n");
 
 	free_bch(bch);
