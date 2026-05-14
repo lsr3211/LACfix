@@ -1,3 +1,9 @@
+Note
+-------------------------
+This legacy readme is kept for compatibility with the original package. The
+current project entry point is README.md, and the CT/SIMD notes are in
+docs/ct-simd-implementation-notes.md.
+
 1. Getting started
 -------------------------
 This file is an optimized implementation of our LAC algorithm. This program uses some functions of OpenSSl, so you need to install OpenSSL for running this program successfully. For building, just run:

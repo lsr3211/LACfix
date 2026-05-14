@@ -1,18 +1,39 @@
 objects = main.o test_correctness.o test_cpucycles.o test_speed.o \
           ake.o ke.o kem.o encrypt.o ecc.o bch.o bin-lwe.o rand.o rng.o
+generated = $(objects:.o=.i) $(objects:.o=.s)
 
 CC = gcc
 OPENSSL_PREFIX ?= /opt/homebrew/opt/openssl@3
 PROFILE ?= CT
 # 默认 CT，要切换就 make PROFILE=STD 或 make PROFILE=CTNEON
+PARAM ?= LAC128
 NEON ?= AUTO
+CTESTS ?= 10000
+BENCH_NTESTS ?= 10000
+BCH_NTESTS ?= 1000
 
 ifdef profile
 PROFILE := $(profile)
 endif
 
-BASE_CFLAGS = -O3 -Wall -DNDEBUG -DLAC_SIGNED_CHAR -I$(OPENSSL_PREFIX)/include
+ifdef param
+PARAM := $(param)
+endif
+
+BASE_CFLAGS = -O3 -Wall -DNDEBUG -DLAC_SIGNED_CHAR \
+              -DCTESTS=$(CTESTS) -DNTESTS=$(BENCH_NTESTS) \
+              -DBCH_NTESTS=$(BCH_NTESTS) -I$(OPENSSL_PREFIX)/include
 LDLIBS = -L$(OPENSSL_PREFIX)/lib -lcrypto -lz
+
+ifeq ($(PARAM),LAC128)
+PARAM_CFLAGS = -DLAC128
+else ifeq ($(PARAM),LAC192)
+PARAM_CFLAGS = -DLAC192
+else ifeq ($(PARAM),LAC256)
+PARAM_CFLAGS = -DLAC256
+else
+$(error Unsupported PARAM '$(PARAM)'. Use PARAM=LAC128, PARAM=LAC192, or PARAM=LAC256)
+endif
 
 ifeq ($(PROFILE),STD)
 PROFILE_CFLAGS = -DLAC_CONFIG_PROFILE=LAC_PROFILE_STD
@@ -46,7 +67,7 @@ $(error Unsupported NEON '$(NEON)'. Use NEON=AUTO, NEON=OFF, or NEON=ON)
 endif
 
 EXTRA_CFLAGS ?=
-CFLAGS = $(BASE_CFLAGS) $(PROFILE_CFLAGS) $(NEON_CFLAGS) $(EXTRA_CFLAGS)
+CFLAGS = $(BASE_CFLAGS) $(PARAM_CFLAGS) $(PROFILE_CFLAGS) $(NEON_CFLAGS) $(EXTRA_CFLAGS)
 
 lac : $(objects)
 	$(CC) -o lac $(objects) $(LDLIBS)
@@ -90,8 +111,9 @@ rand.o: rand.c lac_param.h rand.h
 rng.o: rng.c rng.h
 	$(CC) -c rng.c $(CFLAGS) 
 
+.PHONY: clean
 clean:
-	rm -f lac lac.exemak $(objects)
+	rm -f lac lac.exe $(objects) $(generated) perf.data perf_kem.data
 
 
           

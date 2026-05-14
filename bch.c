@@ -1867,7 +1867,9 @@ int decode_bch(struct bch_control *bch, const uint8_t *data, unsigned int len,
 		syn = bch->syn;
 	}
 
+#if LAC_CFG_CT_BCH
 have_syndromes:
+#endif
 	#if LAC_CFG_CT_BCH
 	#if LAC_CFG_CT_NEON_BCH_ELP
 	err = compute_error_locator_polynomial_ct_neon(bch, syn);
@@ -2069,6 +2071,65 @@ have_syndromes:
 }
 EXPORT_SYMBOL_GPL(decode_bch_ct_scalar);
 
+#if LAC_CFG_CT_NEON_BCH
+static inline uint32_t bch_neon_hor_or_u32(uint32x4_t v)
+{
+	uint32x2_t r = vorr_u32(vget_low_u32(v), vget_high_u32(v));
+
+	r = vorr_u32(r, vext_u32(r, r, 1));
+	return vget_lane_u32(r, 0);
+}
+
+static void bch_map_errloc_ct_neon(struct bch_control *bch,
+				   unsigned int len,
+				   unsigned int *errloc,
+				   int *err)
+{
+	unsigned int i;
+	unsigned int nbits = (len*8)+bch->ecc_bits;
+	uint32_t mask_err_pos = 0u - (uint32_t)(*err > 0);
+	uint32_t err_u = (uint32_t)*err;
+	uint32_t invalid;
+	const uint32x4_t lane_step = { 0, 1, 2, 3 };
+	const uint32x4_t one = vdupq_n_u32(1u);
+	const uint32x4_t seven = vdupq_n_u32(7u);
+	const uint32x4_t not_seven = vdupq_n_u32(~7u);
+	const uint32x4_t nbits_vec = vdupq_n_u32(nbits);
+	const uint32x4_t mask_err_pos_vec = vdupq_n_u32(mask_err_pos);
+	const uint32x4_t err_vec = vdupq_n_u32(err_u);
+	uint32x4_t invalid_vec = vdupq_n_u32(0);
+
+	for (i = 0; i + 3u < bch->t; i += 4u) {
+		uint32x4_t slot_vec = vaddq_u32(vdupq_n_u32(i), lane_step);
+		uint32x4_t loc = vld1q_u32(errloc + i);
+		uint32x4_t mask_i = vandq_u32(mask_err_pos_vec,
+					       vcltq_u32(slot_vec, err_vec));
+		uint32x4_t in_range = vcltq_u32(loc, nbits_vec);
+		uint32x4_t mapped = vsubq_u32(vsubq_u32(nbits_vec, one), loc);
+		uint32x4_t bit = vsubq_u32(seven, vandq_u32(mapped, seven));
+
+		mapped = vorrq_u32(vandq_u32(mapped, not_seven), bit);
+		vst1q_u32(errloc + i, vbslq_u32(mask_i, mapped, loc));
+		invalid_vec = vorrq_u32(invalid_vec,
+					vandq_u32(mask_i, vmvnq_u32(in_range)));
+	}
+
+	invalid = bch_neon_hor_or_u32(invalid_vec);
+	for (; i < bch->t; i++) {
+		uint32_t mask_i = mask_err_pos & ct_mask_lt_u32(i, err_u);
+		uint32_t loc = errloc[i];
+		uint32_t mask_in_range = ct_mask_lt_u32(loc, nbits);
+		uint32_t mapped = nbits-1-loc;
+
+		mapped = (mapped & ~7u) | (7u-(mapped & 7u));
+		errloc[i] = ct_select_u32(mask_i, mapped, errloc[i]);
+		invalid |= mask_i & ~mask_in_range;
+	}
+
+	*err = ct_select_int(ct_mask_nonzero_u32(invalid), -EBADMSG, *err);
+}
+#endif
+
 int decode_bch_ctneon(struct bch_control *bch, const uint8_t *data,
 		      unsigned int len, const uint8_t *recv_ecc,
 		      const uint8_t *calc_ecc, const unsigned int *syn,
@@ -2076,7 +2137,6 @@ int decode_bch_ctneon(struct bch_control *bch, const uint8_t *data,
 {
 #if LAC_CFG_CT_NEON_BCH
 	const unsigned int ecc_words = BCH_ECC_WORDS(bch);
-	unsigned int nbits;
 	int i, sum = 0, err, nroots;
 
 	if (8*len > (bch->n-bch->ecc_bits))
@@ -2119,20 +2179,7 @@ have_syndromes:
 		selected = ct_select_int(mask_err_neg, -EBADMSG, selected);
 		err = selected;
 	}
-	if (err > 0) {
-		nbits = (len*8)+bch->ecc_bits;
-		for (i = 0; i < (int)bch->t; i++) {
-			uint32_t mask_i = ct_mask_lt_u32(i, err);
-			uint32_t loc = errloc[i];
-			uint32_t mask_oob = mask_i &
-				(0u - (uint32_t)(loc >= nbits));
-			uint32_t mapped = nbits-1-loc;
-
-			mapped = (mapped & ~7u) | (7u-(mapped & 7u));
-			errloc[i] = ct_select_u32(mask_i, mapped, errloc[i]);
-			err = ct_select_int(mask_oob, -EBADMSG, err);
-		}
-	}
+	bch_map_errloc_ct_neon(bch, len, errloc, &err);
 
 	return err;
 #else

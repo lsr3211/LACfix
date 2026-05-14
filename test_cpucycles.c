@@ -17,8 +17,13 @@
 
 
 
+#ifndef NTESTS
 #define NTESTS 10000
+#endif
+
+#ifndef BCH_NTESTS
 #define BCH_NTESTS 1000
+#endif
 
 #if LAC_CFG_CT_NEON_BCH
 #define BCH_SIMD_LABEL "CTNEON decode"

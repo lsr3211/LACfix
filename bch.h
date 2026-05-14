@@ -76,8 +76,6 @@ void free_bch(struct bch_control *bch);
 void encode_bch(struct bch_control *bch, const uint8_t *data,
 		unsigned int len, uint8_t *ecc);
 
-void compute_even_syndromes(struct bch_control *bch, unsigned int *syn);
-
 int decode_bch(struct bch_control *bch, const uint8_t *data, unsigned int len,
 	       const uint8_t *recv_ecc, const uint8_t *calc_ecc,
 	       const unsigned int *syn, unsigned int *errloc);

@@ -5,7 +5,9 @@
 #include "ecc.h"
 #include "rand.h"
 
+#ifndef CTESTS
 #define CTESTS 10000
+#endif
 uint64_t loop=1;
 
 static void print_uint64(unsigned long long num)
@@ -50,19 +52,6 @@ int print_error_bit(unsigned char *k1, unsigned char *k2, int num)
 	printf("\n");
 	
 	return sum;
-}
-
-//print bytes
-int print_bytes(unsigned char *buf, int len)
-{
-	int i;
-	for(i=0;i<len;i++)
-	{
-		printf("%d ",buf[i]);
-	}
-	printf("\n");
-	
-	return 0;
 }
 
 //test correctness of pke

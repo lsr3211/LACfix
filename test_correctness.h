@@ -12,6 +12,3 @@ int test_ake_correctness();
 
 //calculate error bit number
 int error_bit_num(unsigned char *k1, unsigned char *k2, int num);
-
-//print bytes
-int print_bytes(unsigned char *buf, int len);

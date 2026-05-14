@@ -7,7 +7,9 @@
 #include <stdint.h>
 #include "compat.h"
 
-#if LAC_CFG_CT_NEON_AVAILABLE
+#if LAC_CFG_CT_NEON_BINLWE_SAMPLER || \
+    LAC_CFG_CT_NEON_BINLWE_CORE || \
+    LAC_CFG_CT_NEON_BINLWE_PACK
 #include <arm_neon.h>
 #endif
 
@@ -52,7 +54,7 @@ static int LAC_UNUSED_FN gen_a_scalar_backend(unsigned char *a,  const unsigned 
 	return 0;
 }
 
-#if LAC_CFG_CT_NEON_AVAILABLE
+#if LAC_CFG_CT_NEON_BINLWE_SAMPLER
 static int gen_a_ct_neon_backend(unsigned char *a,  const unsigned char *seed)
 {
     unsigned int i, lane;
@@ -100,7 +102,7 @@ static int gen_a_ct_neon_backend(unsigned char *a,  const unsigned char *seed)
 
 int gen_a(unsigned char *a,  const unsigned char *seed)
 {
-#if LAC_CFG_CT_NEON_AVAILABLE
+#if LAC_CFG_CT_NEON_BINLWE_SAMPLER
     return gen_a_ct_neon_backend(a, seed);
 #else
     return gen_a_scalar_backend(a, seed);
@@ -241,7 +243,7 @@ static int LAC_UNUSED_FN gen_psi_std_scalar_backend(lac_small_t *e, unsigned int
 	return 0;
 }
 
-#if LAC_CFG_CT_NEON_AVAILABLE
+#if LAC_CFG_CT_NEON_BINLWE_SAMPLER
 static inline void store_s8x16_tail(lac_small_t *dst, int8x16_t src, unsigned int n)
 {
     if (n >= 8u) {
@@ -363,7 +365,7 @@ static int gen_psi_std_ct_neon_backend(lac_small_t *e, unsigned int vec_num, uns
 
 int gen_psi_std(lac_small_t *e, unsigned int vec_num, unsigned char *seed)
 {
-#if LAC_CFG_CT_NEON_AVAILABLE
+#if LAC_CFG_CT_NEON_BINLWE_SAMPLER
     return gen_psi_std_ct_neon_backend(e, vec_num, seed);
 #else
     return gen_psi_std_scalar_backend(e, vec_num, seed);
@@ -381,7 +383,7 @@ static inline uint32_t ct_mask_eq_u32(uint32_t a, uint32_t b)
     return (uint32_t)(0u - x);   /* equal -> 0xffffffff, else 0 */
 }
 
-static inline uint32_t ct_mask_nonzero_u32(uint32_t x)
+static inline uint32_t LAC_UNUSED_FN ct_mask_nonzero_u32(uint32_t x)
 {
     return (uint32_t)(0u - ((x | (0u - x)) >> 31));
 }
@@ -517,7 +519,7 @@ static int LAC_UNUSED_FN fill_random_keys(psi_item_t *items, unsigned int vec_nu
     return fill_random_keys_scalar(items, vec_num, seed);
 }
 
-#if LAC_CFG_CT_NEON_AVAILABLE
+#if LAC_CFG_CT_NEON_BINLWE_SAMPLER
 static int fill_random_keys_ct_neon_soa(uint32_t *keys,
                                         uint16_t *idxs,
                                         unsigned int vec_num,
@@ -698,6 +700,23 @@ static void psi_bitonic_sort_soa_ct_neon(uint32_t *keys, uint16_t *idxs, unsigne
     }
 }
 
+static inline int16x8_t psi_match4_count_u16(uint16x8_t idx_vec,
+                                             const uint16_t *idxs)
+{
+    const uint16x8_t one_u16 = vdupq_n_u16(1u);
+    uint16x8_t m0 = vandq_u16(vceqq_u16(idx_vec,
+                                        vdupq_n_u16(idxs[0])), one_u16);
+    uint16x8_t m1 = vandq_u16(vceqq_u16(idx_vec,
+                                        vdupq_n_u16(idxs[1])), one_u16);
+    uint16x8_t m2 = vandq_u16(vceqq_u16(idx_vec,
+                                        vdupq_n_u16(idxs[2])), one_u16);
+    uint16x8_t m3 = vandq_u16(vceqq_u16(idx_vec,
+                                        vdupq_n_u16(idxs[3])), one_u16);
+
+    return vreinterpretq_s16_u16(vaddq_u16(vaddq_u16(m0, m1),
+                                           vaddq_u16(m2, m3)));
+}
+
 static int psi_writeback_ct_neon_soa(lac_small_t *e,
                                      unsigned int vec_num,
                                      const uint16_t *idxs,
@@ -720,7 +739,14 @@ static int psi_writeback_ct_neon_soa(lac_small_t *e,
         int16x8_t val_lo = vdupq_n_s16(0);
         int16x8_t val_hi = vdupq_n_s16(0);
 
-        for (k = 0; k < bound1; k++) {
+        for (k = 0; k + 3u < bound1; k += 4u) {
+            val_lo = vaddq_s16(val_lo,
+                               psi_match4_count_u16(idx_lo_vec, idxs + k));
+            val_hi = vaddq_s16(val_hi,
+                               psi_match4_count_u16(idx_hi_vec, idxs + k));
+        }
+
+        for (; k < bound1; k++) {
             uint16x8_t idx_k = vdupq_n_u16(idxs[k]);
             uint16x8_t m_lo = vceqq_u16(idx_lo_vec, idx_k);
             uint16x8_t m_hi = vceqq_u16(idx_hi_vec, idx_k);
@@ -730,7 +756,14 @@ static int psi_writeback_ct_neon_soa(lac_small_t *e,
             val_hi = vaddq_s16(val_hi, add_hi);
         }
 
-        for (k = bound1; k < bound2; k++) {
+        for (k = bound1; k + 3u < bound2; k += 4u) {
+            val_lo = vsubq_s16(val_lo,
+                               psi_match4_count_u16(idx_lo_vec, idxs + k));
+            val_hi = vsubq_s16(val_hi,
+                               psi_match4_count_u16(idx_hi_vec, idxs + k));
+        }
+
+        for (; k < bound2; k++) {
             uint16x8_t idx_k = vdupq_n_u16(idxs[k]);
             uint16x8_t m_lo = vceqq_u16(idx_lo_vec, idx_k);
             uint16x8_t m_hi = vceqq_u16(idx_hi_vec, idx_k);
@@ -786,7 +819,7 @@ int gen_psi_fix_ham_ct(lac_small_t *e, unsigned int vec_num, unsigned char *seed
         }
     }
 
-#if LAC_CFG_CT_NEON_AVAILABLE
+#if LAC_CFG_CT_NEON_BINLWE_SAMPLER
     {
         uint32_t keys[vec_num];
         uint16_t idxs[vec_num];
@@ -972,7 +1005,7 @@ static int poly_aff_scalar_orig(const unsigned char *a, const lac_small_t *s, la
 //恒定时间版（未进行SIMD化）
 #if LAC_CFG_CT_BINLWE_SCALAR_MUL
 /* 恒定时间辅助函数 */
-static inline uint16_t ct_mask_eq_i16(int16_t x, int16_t y)
+static inline uint16_t LAC_UNUSED_FN ct_mask_eq_i16(int16_t x, int16_t y)
 {
     uint16_t q = (uint16_t)(x ^ y);
     q |= (uint16_t)(0u - q);
@@ -1120,20 +1153,7 @@ static int poly_aff_scalar_ct(const unsigned char *a, const lac_small_t *s,
         return 1;
     }
 
-    /* 构造 v / s0 / s1 */
-    memset(s0, 0, sizeof(s0));
-    memset(s1, 0, sizeof(s1));
-
-    for (i = 0; i < DIM_N; i++) {
-        int16_t si = (int16_t)s[i];
-
-        v[i] = a[DIM_N - 1 - i];
-        v[i + DIM_N] = Q - v[i];
-
-        /* 用恒定时间掩码代替秘密分支 */
-        s0[i] = ct_mask_eq_i16(si, -1);
-        s1[i] = ct_mask_eq_i16(si,  1);
-    }
+    build_vs_masks(a, s, v, s0, s1);
 
     for (i = 0; i < (int)vec_num; i++) {
         v_p  = (const int64_t *)(v + DIM_N - i - 1);
@@ -1454,12 +1474,81 @@ static int LAC_UNUSED_FN poly_compress_scalar(const unsigned char *in, unsigned 
 }
 
 #if LAC_CFG_CT_NEON_BINLWE_PACK
-static inline uint8x8_t poly_compress4_ct_neon(const unsigned char *in,
-                                               uint16x8_t add8)
+static inline uint8x8_t load_u8_tail_ct_neon(const unsigned char *in,
+                                             unsigned int n)
 {
-    uint8x8_t src = vld1_u8(in);
-    uint16x8_t rounded = vshrq_n_u16(vaddq_u16(vmovl_u8(src), add8), 4);
-    uint8x8x2_t eo = vuzp_u8(vmovn_u16(rounded), vdup_n_u8(0));
+    uint8x8_t v = vdup_n_u8(0);
+
+    switch (n) {
+    case 7: v = vld1_lane_u8(in + 6u, v, 6);
+    case 6: v = vld1_lane_u8(in + 5u, v, 5);
+    case 5: v = vld1_lane_u8(in + 4u, v, 4);
+    case 4: v = vld1_lane_u8(in + 3u, v, 3);
+    case 3: v = vld1_lane_u8(in + 2u, v, 2);
+    case 2: v = vld1_lane_u8(in + 1u, v, 1);
+    case 1: v = vld1_lane_u8(in, v, 0);
+    default: break;
+    }
+
+    return v;
+}
+
+static inline uint8x16_t load_u8q_tail_ct_neon(const unsigned char *in,
+                                               unsigned int n)
+{
+    uint8x16_t v = vdupq_n_u8(0);
+
+    if (n >= 8u) {
+        v = vcombine_u8(vld1_u8(in), vdup_n_u8(0));
+        in += 8u;
+        n -= 8u;
+    }
+
+    if (n != 0u) {
+        uint8x8_t hi = load_u8_tail_ct_neon(in, n);
+
+        v = vcombine_u8(vget_low_u8(v), hi);
+    }
+
+    return v;
+}
+
+static inline void store_u8_tail_ct_neon(unsigned char *out, uint8x8_t v,
+                                         unsigned int n)
+{
+    switch (n) {
+    case 7: vst1_lane_u8(out + 6u, v, 6);
+    case 6: vst1_lane_u8(out + 5u, v, 5);
+    case 5: vst1_lane_u8(out + 4u, v, 4);
+    case 4: vst1_lane_u8(out + 3u, v, 3);
+    case 3: vst1_lane_u8(out + 2u, v, 2);
+    case 2: vst1_lane_u8(out + 1u, v, 1);
+    case 1: vst1_lane_u8(out, v, 0);
+    default: break;
+    }
+}
+
+static inline void store_u8q_tail_ct_neon(unsigned char *out, uint8x16_t v,
+                                          unsigned int n)
+{
+    if (n >= 8u) {
+        vst1_u8(out, vget_low_u8(v));
+        out += 8u;
+        n -= 8u;
+        v = vcombine_u8(vget_high_u8(v), vdup_n_u8(0));
+    }
+
+    store_u8_tail_ct_neon(out, vget_low_u8(v), n);
+}
+
+static inline uint8x8_t poly_compress_tail_ct_neon(const unsigned char *in,
+                                                   unsigned int out_n,
+                                                   uint16x8_t add8)
+{
+    uint8x16_t src = load_u8q_tail_ct_neon(in, out_n << 1);
+    uint16x8_t rounded_lo = vshrq_n_u16(vaddq_u16(vmovl_u8(vget_low_u8(src)), add8), 4);
+    uint16x8_t rounded_hi = vshrq_n_u16(vaddq_u16(vmovl_u8(vget_high_u8(src)), add8), 4);
+    uint8x8x2_t eo = vuzp_u8(vmovn_u16(rounded_lo), vmovn_u16(rounded_hi));
 
     return vorr_u8(eo.val[0], vshl_n_u8(eo.val[1], 4));
 }
@@ -1489,23 +1578,10 @@ static int poly_compress_ct_neon(const unsigned char *in, unsigned char *out,
     }
     if (i < loop) {
         unsigned int rem = loop - i;
+        uint8x8_t packed = poly_compress_tail_ct_neon(in + (i << 1),
+                                                      rem, add8);
 
-        if (rem >= 4u) {
-            uint8x8_t packed4 = poly_compress4_ct_neon(in + (i << 1), add8);
-            vst1_lane_u8(out + i, packed4, 0);
-            vst1_lane_u8(out + i + 1u, packed4, 1);
-            vst1_lane_u8(out + i + 2u, packed4, 2);
-            vst1_lane_u8(out + i + 3u, packed4, 3);
-            i += 4u;
-            rem -= 4u;
-        }
-
-        while (rem != 0u) {
-            out[i] = (unsigned char)((in[i * 2u] + 0x08u) >> 4);
-            out[i] = (unsigned char)(out[i] ^ ((in[i * 2u + 1u] + 0x08u) & 0xf0u));
-            i++;
-            rem--;
-        }
+        store_u8_tail_ct_neon(out + i, packed, rem);
     }
 
     return 0;
@@ -1538,22 +1614,14 @@ static int LAC_UNUSED_FN poly_decompress_scalar(const unsigned char *in, unsigne
 }
 
 #if LAC_CFG_CT_NEON_BINLWE_PACK
-static inline uint8x16_t poly_decompress4_ct_neon(const unsigned char *in,
-                                                  uint8x8_t hi_mask)
+static inline uint8x16_t poly_decompress_tail_ct_neon(const unsigned char *in,
+                                                      unsigned int in_n,
+                                                      uint8x8_t hi_mask)
 {
-    uint8x8_t src = vdup_n_u8(0);
-    uint8x8_t even;
-    uint8x8_t odd;
-    uint8x8x2_t inter;
-
-    src = vld1_lane_u8(in, src, 0);
-    src = vld1_lane_u8(in + 1u, src, 1);
-    src = vld1_lane_u8(in + 2u, src, 2);
-    src = vld1_lane_u8(in + 3u, src, 3);
-
-    even = vshl_n_u8(src, 4);
-    odd = vand_u8(src, hi_mask);
-    inter = vzip_u8(even, odd);
+    uint8x8_t src = load_u8_tail_ct_neon(in, in_n);
+    uint8x8_t even = vshl_n_u8(src, 4);
+    uint8x8_t odd = vand_u8(src, hi_mask);
+    uint8x8x2_t inter = vzip_u8(even, odd);
 
     return vcombine_u8(inter.val[0], inter.val[1]);
 }
@@ -1582,19 +1650,10 @@ static int poly_decompress_ct_neon(const unsigned char *in, unsigned char *out,
     }
     if (i < loop) {
         unsigned int rem = loop - i;
+        uint8x16_t expanded = poly_decompress_tail_ct_neon(in + i, rem,
+                                                           hi_mask);
 
-        if (rem >= 4u) {
-            vst1_u8(out + (i << 1), vget_low_u8(poly_decompress4_ct_neon(in + i, hi_mask)));
-            i += 4u;
-            rem -= 4u;
-        }
-
-        while (rem != 0u) {
-            out[i * 2u] = (unsigned char)(in[i] << 4);
-            out[i * 2u + 1u] = (unsigned char)(in[i] & 0xf0u);
-            i++;
-            rem--;
-        }
+        store_u8q_tail_ct_neon(out + (i << 1), expanded, rem << 1);
     }
 
     return 0;

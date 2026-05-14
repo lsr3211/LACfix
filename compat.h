@@ -163,6 +163,11 @@ typedef char lac_small_t;
 #endif
 #endif
 
+/* bin-lwe 采样/公参生成路径。 */
+#ifndef LAC_CFG_CT_NEON_BINLWE_SAMPLER
+#define LAC_CFG_CT_NEON_BINLWE_SAMPLER LAC_CFG_CT_NEON_AVAILABLE
+#endif
+
 /* bin-lwe 核心乘加路径：
  * 这是当前最适合先做 CT-NEON 的热点。 */
 #ifndef LAC_CFG_CT_NEON_BINLWE_CORE
@@ -188,6 +193,15 @@ typedef char lac_small_t;
 #define LAC_CFG_CT_NEON_PKE_MESSAGE_ADD LAC_CFG_CT_NEON_ENCRYPT
 #endif
 
+/* kem.c FO decapsulation verify/select path. */
+#ifndef LAC_CFG_CT_NEON_KEM
+#define LAC_CFG_CT_NEON_KEM LAC_CFG_CT_NEON_AVAILABLE
+#endif
+
+#ifndef LAC_CFG_CT_NEON_KEM_DEC_VERIFY
+#define LAC_CFG_CT_NEON_KEM_DEC_VERIFY LAC_CFG_CT_NEON_KEM
+#endif
+
 /* bch.c 解码路径：在 CT 标量基线上启用 NEON 后端。 */
 #ifndef LAC_CFG_CT_NEON_BCH
 #define LAC_CFG_CT_NEON_BCH LAC_CFG_CT_NEON_AVAILABLE
@@ -206,6 +220,26 @@ typedef char lac_small_t;
 #endif
 
 #if !LAC_CFG_CT_NEON_AVAILABLE
+#undef LAC_CFG_CT_NEON_ECC
+#define LAC_CFG_CT_NEON_ECC 0
+#undef LAC_CFG_CT_NEON_ECC_CORRECT
+#define LAC_CFG_CT_NEON_ECC_CORRECT 0
+#undef LAC_CFG_CT_NEON_BINLWE_SAMPLER
+#define LAC_CFG_CT_NEON_BINLWE_SAMPLER 0
+#undef LAC_CFG_CT_NEON_BINLWE_CORE
+#define LAC_CFG_CT_NEON_BINLWE_CORE 0
+#undef LAC_CFG_CT_NEON_BINLWE_PACK
+#define LAC_CFG_CT_NEON_BINLWE_PACK 0
+#undef LAC_CFG_CT_NEON_ENCRYPT
+#define LAC_CFG_CT_NEON_ENCRYPT 0
+#undef LAC_CFG_CT_NEON_PKE_THRESHOLD_DEC
+#define LAC_CFG_CT_NEON_PKE_THRESHOLD_DEC 0
+#undef LAC_CFG_CT_NEON_PKE_MESSAGE_ADD
+#define LAC_CFG_CT_NEON_PKE_MESSAGE_ADD 0
+#undef LAC_CFG_CT_NEON_KEM
+#define LAC_CFG_CT_NEON_KEM 0
+#undef LAC_CFG_CT_NEON_KEM_DEC_VERIFY
+#define LAC_CFG_CT_NEON_KEM_DEC_VERIFY 0
 #undef LAC_CFG_CT_NEON_BCH
 #define LAC_CFG_CT_NEON_BCH 0
 #undef LAC_CFG_CT_NEON_BCH_SYNDROME
@@ -218,7 +252,7 @@ typedef char lac_small_t;
 
 /* 兼容别名：保留之前的 SIMD 命名，避免后续小范围代码还没改完时断掉。 */
 #ifndef LAC_CFG_SIMD
-#define LAC_CFG_SIMD LAC_CFG_CT_NEON
+#define LAC_CFG_SIMD LAC_CFG_CT_NEON_AVAILABLE
 #endif
 
 #ifndef LAC_CFG_SIMD_NEON
@@ -229,12 +263,20 @@ typedef char lac_small_t;
 #define LAC_CFG_SIMD_BINLWE_CORE LAC_CFG_CT_NEON_BINLWE_CORE
 #endif
 
+#ifndef LAC_CFG_SIMD_BINLWE_SAMPLER
+#define LAC_CFG_SIMD_BINLWE_SAMPLER LAC_CFG_CT_NEON_BINLWE_SAMPLER
+#endif
+
 #ifndef LAC_CFG_SIMD_BINLWE_PACK
 #define LAC_CFG_SIMD_BINLWE_PACK LAC_CFG_CT_NEON_BINLWE_PACK
 #endif
 
 #ifndef LAC_CFG_SIMD_ENCRYPT
 #define LAC_CFG_SIMD_ENCRYPT LAC_CFG_CT_NEON_ENCRYPT
+#endif
+
+#ifndef LAC_CFG_SIMD_KEM
+#define LAC_CFG_SIMD_KEM LAC_CFG_CT_NEON_KEM
 #endif
 
 #ifndef LAC_CFG_SIMD_ECC

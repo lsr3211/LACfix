@@ -25,7 +25,8 @@ static inline uint32_t enc_ct_mask_lt_u32(uint32_t a, uint32_t b)
 	return 0u - (uint32_t)(diff >> 63);
 }
 
-static inline uint32_t enc_ct_mask_ge_u32(uint32_t a, uint32_t b)
+static inline uint32_t LAC_ENC_UNUSED_FN enc_ct_mask_ge_u32(uint32_t a,
+							    uint32_t b)
 {
 	return ~enc_ct_mask_lt_u32(a, b);
 }
@@ -54,10 +55,6 @@ static const uint8_t enc_neon_bit_shift_bytes[16] = {
 	0, 1, 2, 3, 4, 5, 6, 7
 };
 
-static const uint8_t enc_neon_bit_shift_bytes8[8] = {
-	0, 1, 2, 3, 4, 5, 6, 7
-};
-
 static inline uint8x16_t enc_neon_code_bits16(const unsigned char *p_code)
 {
 	uint8x8_t lo = vdup_n_u8(p_code[0]);
@@ -69,26 +66,106 @@ static inline uint8x16_t enc_neon_code_bits16(const unsigned char *p_code)
 	return vandq_u8(shifted, vdupq_n_u8(1u));
 }
 
-static inline uint8x8_t enc_neon_code_bits8(const unsigned char *p_code)
+static inline uint8x16_t enc_neon_code_bits16_tail(const unsigned char *p_code,
+						   unsigned int n)
 {
-	uint8x8_t bytes = vdup_n_u8(p_code[0]);
-	uint8x8_t shifts = vld1_u8(enc_neon_bit_shift_bytes8);
-	uint8x8_t shifted = vshl_u8(bytes, vneg_s8(vreinterpret_s8_u8(shifts)));
+	uint8x8_t lo = vdup_n_u8(p_code[0]);
+	uint8x8_t hi = vdup_n_u8((n > 8u) ? p_code[1] : 0u);
+	uint8x16_t bytes = vcombine_u8(lo, hi);
+	uint8x16_t shifts = vld1q_u8(enc_neon_bit_shift_bytes);
+	uint8x16_t shifted = vshlq_u8(bytes, vnegq_s8(vreinterpretq_s8_u8(shifts)));
 
-	return vand_u8(shifted, vdup_n_u8(1u));
+	return vandq_u8(shifted, vdupq_n_u8(1u));
+}
+
+static inline uint8x8_t enc_load_u8_tail(const unsigned char *in,
+					 unsigned int n)
+{
+	uint8x8_t v = vdup_n_u8(0);
+
+	switch (n) {
+	case 7: v = vld1_lane_u8(in + 6u, v, 6);
+	case 6: v = vld1_lane_u8(in + 5u, v, 5);
+	case 5: v = vld1_lane_u8(in + 4u, v, 4);
+	case 4: v = vld1_lane_u8(in + 3u, v, 3);
+	case 3: v = vld1_lane_u8(in + 2u, v, 2);
+	case 2: v = vld1_lane_u8(in + 1u, v, 1);
+	case 1: v = vld1_lane_u8(in, v, 0);
+	default: break;
+	}
+
+	return v;
+}
+
+static inline int8x16_t enc_load_s8q_tail(const lac_small_t *in,
+					  unsigned int n)
+{
+	int8x16_t v = vdupq_n_s8(0);
+
+	if (n >= 8u) {
+		v = vcombine_s8(vld1_s8((const int8_t *)in), vdup_n_s8(0));
+		in += 8u;
+		n -= 8u;
+	}
+	if (n != 0u) {
+		int8x8_t hi = vdup_n_s8(0);
+
+		switch (n) {
+		case 7: hi = vld1_lane_s8((const int8_t *)in + 6u, hi, 6);
+		case 6: hi = vld1_lane_s8((const int8_t *)in + 5u, hi, 5);
+		case 5: hi = vld1_lane_s8((const int8_t *)in + 4u, hi, 4);
+		case 4: hi = vld1_lane_s8((const int8_t *)in + 3u, hi, 3);
+		case 3: hi = vld1_lane_s8((const int8_t *)in + 2u, hi, 2);
+		case 2: hi = vld1_lane_s8((const int8_t *)in + 1u, hi, 1);
+		case 1: hi = vld1_lane_s8((const int8_t *)in, hi, 0);
+		default: break;
+		}
+		v = vcombine_s8(vget_low_s8(v), hi);
+	}
+
+	return v;
+}
+
+static inline void enc_store_s8q_tail(lac_small_t *out, int8x16_t v,
+				      unsigned int n)
+{
+	if (n >= 8u) {
+		vst1_s8((int8_t *)out, vget_low_s8(v));
+		out += 8u;
+		n -= 8u;
+		v = vcombine_s8(vget_high_s8(v), vdup_n_s8(0));
+	}
+	if (n != 0u) {
+		int8x8_t lo = vget_low_s8(v);
+
+		switch (n) {
+		case 7: vst1_lane_s8((int8_t *)out + 6u, lo, 6);
+		case 6: vst1_lane_s8((int8_t *)out + 5u, lo, 5);
+		case 5: vst1_lane_s8((int8_t *)out + 4u, lo, 4);
+		case 4: vst1_lane_s8((int8_t *)out + 3u, lo, 3);
+		case 3: vst1_lane_s8((int8_t *)out + 2u, lo, 2);
+		case 2: vst1_lane_s8((int8_t *)out + 1u, lo, 1);
+		case 1: vst1_lane_s8((int8_t *)out, lo, 0);
+		default: break;
+		}
+	}
+}
+
+static inline uint8_t enc_tail_bitmask(unsigned int n)
+{
+	return (uint8_t)((1u << n) - 1u);
 }
 
 static inline uint8_t enc_neon_pack8_u16(uint16x8_t mask)
 {
-	uint16_t lanes[8];
-	uint8_t packed = 0;
-	unsigned int i;
+	const uint8x8_t weights = {1u, 2u, 4u, 8u, 16u, 32u, 64u, 128u};
+	uint8x8_t bits = vmovn_u16(vshrq_n_u16(mask, 15));
+	uint8x8_t weighted = vmul_u8(bits, weights);
+	uint16x4_t sum16 = vpaddl_u8(weighted);
+	uint32x2_t sum32 = vpaddl_u16(sum16);
+	uint64x1_t sum64 = vpaddl_u32(sum32);
 
-	vst1q_u16(lanes, mask);
-	for (i = 0; i < 8u; i++)
-		packed |= (uint8_t)(((lanes[i] >> 15) & 1u) << i);
-
-	return packed;
+	return (uint8_t)vget_lane_u64(sum64, 0);
 }
 
 static inline int16x8_t enc_neon_sub_mod_q8(uint8x8_t x, uint8x8_t y)
@@ -166,15 +243,16 @@ static void pke_recover_msg_ct_neon(const unsigned char *c2,
 		p_code[i >> 3] ^= packed;
 	}
 
-	for (; i < c2_len; i++)
+	if (i < c2_len)
 	{
-		int temp=enc_sub_mod_q_u8(c2[i], out[i]);
-		uint32_t bit_mask =
-			enc_ct_mask_ge_u32((uint32_t)temp, (uint32_t)(Q/4)) &
-			enc_ct_mask_lt_u32((uint32_t)temp, (uint32_t)(Q*3/4)) &
-			(1u << (i%8));
+		unsigned int rem = (unsigned int)(c2_len - i);
+		int16x8_t temp = enc_neon_sub_mod_q8(enc_load_u8_tail(c2 + i, rem),
+						     enc_load_u8_tail(out + i, rem));
+		uint16x8_t ge_low = vcgeq_s16(temp, low);
+		uint16x8_t lt_high = vcltq_s16(temp, high);
+		uint8_t packed = enc_neon_pack8_u16(vandq_u16(ge_low, lt_high));
 
-		p_code[i/8] ^= (unsigned char)bit_mask;
+		p_code[i >> 3] ^= (uint8_t)(packed & enc_tail_bitmask(rem));
 	}
 }
 #endif
@@ -297,20 +375,25 @@ static void pke_recover_msg_d2_ct_neon(const unsigned char *c2,
 		p_code[i >> 3] ^= packed;
 	}
 
-	for (; i < vec_bound; i++)
+	if (i < vec_bound)
 	{
-		int temp1=enc_sub_mod_q_u8(c2[i], out[i]);
-		int temp2=enc_sub_mod_q_u8(c2[i+vec_bound], out[i+vec_bound]);
-		uint32_t mask1 = enc_ct_mask_lt_u32((uint32_t)temp1, (uint32_t)(Q/2));
-		uint32_t mask2 = enc_ct_mask_lt_u32((uint32_t)temp2, (uint32_t)(Q/2));
+		unsigned int rem = (unsigned int)(vec_bound - i);
+		int16x8_t temp1 = enc_neon_sub_mod_q8(enc_load_u8_tail(c2 + i, rem),
+						      enc_load_u8_tail(out + i, rem));
+		int16x8_t temp2 = enc_neon_sub_mod_q8(enc_load_u8_tail(c2 + vec_bound + i, rem),
+						      enc_load_u8_tail(out + vec_bound + i, rem));
+		uint16x8_t mask1 = vcltq_s16(temp1, center);
+		uint16x8_t mask2 = vcltq_s16(temp2, center);
+		int16x8_t flip1 = vsubq_s16(q, temp1);
+		int16x8_t flip2 = vsubq_s16(q, temp2);
+		int16x8_t merged;
+		uint8_t packed;
 
-		temp1 = (int)enc_ct_select_u32(mask1, (uint32_t)(Q-temp1), (uint32_t)temp1);
-		temp2 = (int)enc_ct_select_u32(mask2, (uint32_t)(Q-temp2), (uint32_t)temp2);
-		temp1+=temp2-Q;
-
-		p_code[i/8] ^= (unsigned char)(enc_ct_mask_lt_u32((uint32_t)temp1,
-								  (uint32_t)(Q/2)) &
-					       (1u << (i%8)));
+		temp1 = vbslq_s16(mask1, flip1, temp1);
+		temp2 = vbslq_s16(mask2, flip2, temp2);
+		merged = vsubq_s16(vaddq_s16(temp1, temp2), q);
+		packed = enc_neon_pack8_u16(vcltq_s16(merged, d2_bound));
+		p_code[i >> 3] ^= (uint8_t)(packed & enc_tail_bitmask(rem));
 	}
 }
 #endif
@@ -370,18 +453,19 @@ static void pke_add_message_ct_neon(lac_small_t *e2,
 
 	if (i < c2_len)
 	{
-		uint8x8_t bits = enc_neon_code_bits8(p_code + (i >> 3));
-		int8x8_t msg = vreinterpret_s8_u8(vmul_u8(bits, vdup_n_u8((uint8_t)RATIO)));
-		int8x8_t vals = vld1_s8((const int8_t *)(e2 + i));
+		unsigned int rem = (unsigned int)(c2_len - i);
+		uint8x16_t bits = enc_neon_code_bits16_tail(p_code + (i >> 3), rem);
+		int8x16_t msg = vreinterpretq_s8_u8(vmulq_u8(bits, ratio));
+		int8x16_t vals = enc_load_s8q_tail(e2 + i, rem);
 
-		vst1_s8((int8_t *)(e2 + i), vadd_s8(vals, msg));
+		enc_store_s8q_tail(e2 + i, vaddq_s8(vals, msg), rem);
 	}
 }
 #endif
 
-static void pke_add_message(lac_small_t *e2,
-			    const unsigned char *p_code,
-			    int c2_len)
+static void LAC_ENC_UNUSED_FN pke_add_message(lac_small_t *e2,
+					      const unsigned char *p_code,
+					      int c2_len)
 {
 #if LAC_CFG_CT_NEON_PKE_MESSAGE_ADD
 	pke_add_message_ct_neon(e2, p_code, c2_len);
@@ -441,11 +525,16 @@ static void pke_add_message_d2_ct_neon(lac_small_t *e2,
 		vst1q_s8((int8_t *)(e2 + vec_bound + i), vaddq_s8(hi, msg));
 	}
 
-	for (; i < vec_bound; i++)
+	if (i < vec_bound)
 	{
-		int8_t message=RATIO*((p_code[i/8]>>(i%8))&1);
-		e2[i]=e2[i]+message;
-		e2[i+vec_bound]=e2[i+vec_bound]+message;
+		unsigned int rem = (unsigned int)(vec_bound - i);
+		uint8x16_t bits = enc_neon_code_bits16_tail(p_code + (i >> 3), rem);
+		int8x16_t msg = vreinterpretq_s8_u8(vmulq_u8(bits, ratio));
+		int8x16_t lo = enc_load_s8q_tail(e2 + i, rem);
+		int8x16_t hi = enc_load_s8q_tail(e2 + vec_bound + i, rem);
+
+		enc_store_s8q_tail(e2 + i, vaddq_s8(lo, msg), rem);
+		enc_store_s8q_tail(e2 + vec_bound + i, vaddq_s8(hi, msg), rem);
 	}
 }
 #endif
