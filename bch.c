@@ -57,6 +57,19 @@
 #define BCH_ECC_WORDS(_p)      DIV_ROUND_UP(GF_M(_p)*GF_T(_p), 32)
 #define BCH_ECC_BYTES(_p)      DIV_ROUND_UP(GF_M(_p)*GF_T(_p), 8)
 
+static inline int bch_decode_args_invalid(struct bch_control *bch,
+					  unsigned int len,
+					  const unsigned int *errloc)
+{
+	unsigned int data_bits;
+
+	if (!bch || !errloc || (bch->n < bch->ecc_bits))
+		return 1;
+
+	data_bits = bch->n - bch->ecc_bits;
+	return len > data_bits/8;
+}
+
 #if LAC_CFG_CT_BCH
 #define BCH_STD_UNUSED __attribute__((unused))
 #else
@@ -523,7 +536,7 @@ static void compute_syndromes_data_ecc_ct_neon(struct bch_control *bch,
 			uint32_t range_mask = 0u - (uint32_t)(bit_off < ecc_bits);
 			uint32_t bit_mask = (0u - ((byte >> (7-bit_idx)) & 1u)) &
 					    range_mask;
-			unsigned int exp = ecc_bits-1-bit_off;
+			unsigned int exp = (ecc_bits-1) - (bit_off & range_mask);
 			int j;
 
 			for (j = 0; j < 2*t; j += 8)
@@ -632,7 +645,9 @@ static inline uint32_t ct_mask_zero_u32(uint32_t x)
 
 static inline uint32_t ct_mask_lt_u32(uint32_t a, uint32_t b)
 {
-	return 0u - ((a - b) >> 31);
+	uint64_t borrow = ((uint64_t)a - (uint64_t)b) >> 63;
+
+	return 0u - (uint32_t)borrow;
 }
 
 static inline uint32_t ct_mask_le_u32(uint32_t a, uint32_t b)
@@ -1809,14 +1824,14 @@ int decode_bch(struct bch_control *bch, const uint8_t *data, unsigned int len,
 	       const uint8_t *recv_ecc, const uint8_t *calc_ecc,
 	       const unsigned int *syn, unsigned int *errloc)
 {
-	const unsigned int ecc_words = BCH_ECC_WORDS(bch);
+	unsigned int ecc_words;
 	unsigned int nbits;
 	int i, err, nroots;
 	uint32_t sum;
 
-	/* sanity check: make sure data length can be handled */
-	if (8*len > (bch->n-bch->ecc_bits))
+	if (bch_decode_args_invalid(bch, len, errloc))
 		return -EINVAL;
+	ecc_words = BCH_ECC_WORDS(bch);
 
 	/* if caller does not provide syndromes, compute them */
 	if (!syn) {
@@ -1948,12 +1963,13 @@ int decode_bch_pure_c(struct bch_control *bch, const uint8_t *data,
 		      const uint8_t *calc_ecc, const unsigned int *syn,
 		      unsigned int *errloc)
 {
-	const unsigned int ecc_words = BCH_ECC_WORDS(bch);
+	unsigned int ecc_words;
 	unsigned int nbits;
 	int i, err, nroots;
 
-	if (8*len > (bch->n-bch->ecc_bits))
+	if (bch_decode_args_invalid(bch, len, errloc))
 		return -EINVAL;
+	ecc_words = BCH_ECC_WORDS(bch);
 
 	if (!syn) {
 		if (!calc_ecc) {
@@ -1998,13 +2014,17 @@ int decode_bch_ct_scalar(struct bch_control *bch, const uint8_t *data,
 			 unsigned int *errloc)
 {
 #if LAC_CFG_CT_BCH
-	const unsigned int ecc_words = BCH_ECC_WORDS(bch);
+	unsigned int ecc_words;
 	unsigned int nbits;
 	int i, err, nroots;
 	uint32_t sum;
+#endif
 
-	if (8*len > (bch->n-bch->ecc_bits))
+	if (bch_decode_args_invalid(bch, len, errloc))
 		return -EINVAL;
+
+#if LAC_CFG_CT_BCH
+	ecc_words = BCH_ECC_WORDS(bch);
 
 	if (!syn) {
 		if (!calc_ecc) {
@@ -2066,7 +2086,7 @@ have_syndromes:
 		return ct_select_int(ok_mask, err, -EBADMSG);
 	}
 #else
-	return decode_bch(bch, data, len, recv_ecc, calc_ecc, syn, errloc);
+	return -EINVAL;
 #endif
 }
 EXPORT_SYMBOL_GPL(decode_bch_ct_scalar);
@@ -2126,7 +2146,7 @@ static void bch_map_errloc_ct_neon(struct bch_control *bch,
 		invalid |= mask_i & ~mask_in_range;
 	}
 
-	*err = ct_select_int(ct_mask_nonzero_u32(invalid), -EBADMSG, *err);
+	*err = ct_select_int(ct_mask_nonzero_u32(invalid), -1, *err);
 }
 #endif
 
@@ -2136,11 +2156,15 @@ int decode_bch_ctneon(struct bch_control *bch, const uint8_t *data,
 		      unsigned int *errloc)
 {
 #if LAC_CFG_CT_NEON_BCH
-	const unsigned int ecc_words = BCH_ECC_WORDS(bch);
+	unsigned int ecc_words;
 	int i, sum = 0, err, nroots;
+#endif
 
-	if (8*len > (bch->n-bch->ecc_bits))
+	if (bch_decode_args_invalid(bch, len, errloc))
 		return -EINVAL;
+
+#if LAC_CFG_CT_NEON_BCH
+	ecc_words = BCH_ECC_WORDS(bch);
 
 	if (!syn) {
 		if (!calc_ecc) {
@@ -2170,20 +2194,22 @@ have_syndromes:
 	{
 		uint32_t mask_err_pos = 0u - (uint32_t)(err > 0);
 		uint32_t mask_err_zero = 0u - (uint32_t)(err == 0);
-		uint32_t mask_mismatch = mask_err_pos &
-			(0u - (uint32_t)(nroots != err));
-		uint32_t mask_err_neg = 0u - (uint32_t)(err < 0);
-		int selected = ct_select_int(mask_err_zero, 0, nroots);
+		uint32_t fail = 0;
 
-		selected = ct_select_int(mask_mismatch, -EBADMSG, selected);
-		selected = ct_select_int(mask_err_neg, -EBADMSG, selected);
-		err = selected;
+		fail |= mask_err_pos &
+			ct_mask_nonzero_u32((uint32_t)err ^ (uint32_t)nroots);
+		fail |= mask_err_zero & ct_mask_nonzero_u32((uint32_t)nroots);
+		fail |= 0u - (uint32_t)(err < 0);
+		err = ct_select_int(ct_mask_nonzero_u32(fail), -1, err);
 	}
 	bch_map_errloc_ct_neon(bch, len, errloc, &err);
 
-	return err;
+	{
+		uint32_t ok_mask = ~((uint32_t)err >> 31);
+		return ct_select_int(ok_mask, err, -EBADMSG);
+	}
 #else
-	return decode_bch(bch, data, len, recv_ecc, calc_ecc, syn, errloc);
+	return -EINVAL;
 #endif
 }
 EXPORT_SYMBOL_GPL(decode_bch_ctneon);

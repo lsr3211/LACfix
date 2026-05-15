@@ -19,6 +19,51 @@
 
 #define RATIO 125
 
+#ifdef LAC256
+#define PKE_C2_COMPRESSED_UNIT 8ULL
+#define PKE_C2_LEN_DIVISOR 16ULL
+#else
+#define PKE_C2_COMPRESSED_UNIT 4ULL
+#define PKE_C2_LEN_DIVISOR 8ULL
+#endif
+
+static int pke_dec_decode_lengths(unsigned long long clen,
+				  int *c2_len,
+				  unsigned long long *mlen)
+{
+	const unsigned long long min_c2_bytes =
+		(unsigned long long)ECC_LEN * PKE_C2_COMPRESSED_UNIT;
+	const unsigned long long max_c2_bytes =
+		(unsigned long long)(MESSAGE_LEN + ECC_LEN) *
+		PKE_C2_COMPRESSED_UNIT;
+	unsigned long long c2_bytes;
+
+	if (clen < (unsigned long long)DIM_N + min_c2_bytes ||
+	    clen > (unsigned long long)DIM_N + max_c2_bytes)
+	{
+		return -1;
+	}
+
+	c2_bytes = clen - (unsigned long long)DIM_N;
+	if ((c2_bytes % PKE_C2_COMPRESSED_UNIT) != 0ULL)
+	{
+		return -1;
+	}
+
+	*c2_len = (int)(c2_bytes * 2ULL);
+	*mlen = (c2_bytes * 2ULL) / PKE_C2_LEN_DIVISOR -
+		(unsigned long long)ECC_LEN;
+
+	return 0;
+}
+
+#ifdef LAC256
+static int pke_d2_recover16_aligned_mlen(unsigned long long mlen)
+{
+	return ((((mlen + (unsigned long long)ECC_LEN) * 8ULL) & 15ULL) == 0ULL);
+}
+#endif
+
 static inline uint32_t enc_ct_mask_lt_u32(uint32_t a, uint32_t b)
 {
 	uint64_t diff = (uint64_t)a - (uint64_t)b;
@@ -78,8 +123,8 @@ static inline uint8x16_t enc_neon_code_bits16_tail(const unsigned char *p_code,
 	return vandq_u8(shifted, vdupq_n_u8(1u));
 }
 
-static inline uint8x8_t enc_load_u8_tail(const unsigned char *in,
-					 unsigned int n)
+static inline uint8x8_t LAC_ENC_UNUSED_FN enc_load_u8_tail(const unsigned char *in,
+							   unsigned int n)
 {
 	uint8x8_t v = vdup_n_u8(0);
 
@@ -151,7 +196,7 @@ static inline void enc_store_s8q_tail(lac_small_t *out, int8x16_t v,
 	}
 }
 
-static inline uint8_t enc_tail_bitmask(unsigned int n)
+static inline uint8_t LAC_ENC_UNUSED_FN enc_tail_bitmask(unsigned int n)
 {
 	return (uint8_t)((1u << n) - 1u);
 }
@@ -175,6 +220,31 @@ static inline int16x8_t enc_neon_sub_mod_q8(uint8x8_t x, uint8x8_t y)
 
 	return vaddq_s16(d, vreinterpretq_s16_u16(vandq_u16(neg, vdupq_n_u16((uint16_t)Q))));
 }
+
+#ifdef LAC256
+static inline uint8_t enc_neon_recover_d2_pack8(uint8x8_t c2_lo,
+						uint8x8_t out_lo,
+						uint8x8_t c2_hi,
+						uint8x8_t out_hi,
+						int16x8_t q,
+						int16x8_t center,
+						int16x8_t d2_bound)
+{
+	int16x8_t temp1 = enc_neon_sub_mod_q8(c2_lo, out_lo);
+	int16x8_t temp2 = enc_neon_sub_mod_q8(c2_hi, out_hi);
+	uint16x8_t mask1 = vcltq_s16(temp1, center);
+	uint16x8_t mask2 = vcltq_s16(temp2, center);
+	int16x8_t flip1 = vsubq_s16(q, temp1);
+	int16x8_t flip2 = vsubq_s16(q, temp2);
+	int16x8_t merged;
+
+	temp1 = vbslq_s16(mask1, flip1, temp1);
+	temp2 = vbslq_s16(mask2, flip2, temp2);
+	merged = vsubq_s16(vaddq_s16(temp1, temp2), q);
+
+	return enc_neon_pack8_u16(vcltq_s16(merged, d2_bound));
+}
+#endif
 #endif
 
 #ifndef LAC256
@@ -349,51 +419,32 @@ static void pke_recover_msg_d2_ct_neon(const unsigned char *c2,
 				       int vec_bound)
 {
 	int i;
-	const int vec_len = vec_bound & ~7;
 	const int16x8_t q = vdupq_n_s16((int16_t)Q);
 	const int16x8_t center = vdupq_n_s16((int16_t)(Q/2));
 	const int16x8_t d2_bound = vdupq_n_s16((int16_t)(Q/2));
 
-	for (i = 0; i < vec_len; i += 8)
+	for (i = 0; i < vec_bound; i += 16)
 	{
-		int16x8_t temp1 = enc_neon_sub_mod_q8(vld1_u8(c2 + i),
-						      vld1_u8(out + i));
-		int16x8_t temp2 = enc_neon_sub_mod_q8(vld1_u8(c2 + vec_bound + i),
-						      vld1_u8(out + vec_bound + i));
-		uint16x8_t mask1 = vcltq_s16(temp1, center);
-		uint16x8_t mask2 = vcltq_s16(temp2, center);
-		int16x8_t flip1 = vsubq_s16(q, temp1);
-		int16x8_t flip2 = vsubq_s16(q, temp2);
-		int16x8_t merged;
-		uint8_t packed;
+		uint8x16_t c2_first = vld1q_u8(c2 + i);
+		uint8x16_t out_first = vld1q_u8(out + i);
+		uint8x16_t c2_second = vld1q_u8(c2 + vec_bound + i);
+		uint8x16_t out_second = vld1q_u8(out + vec_bound + i);
+		uint8_t packed_low;
+		uint8_t packed_high;
 
-		temp1 = vbslq_s16(mask1, flip1, temp1);
-		temp2 = vbslq_s16(mask2, flip2, temp2);
-		merged = vsubq_s16(vaddq_s16(temp1, temp2), q);
-		packed = enc_neon_pack8_u16(vcltq_s16(merged, d2_bound));
+		packed_low = enc_neon_recover_d2_pack8(vget_low_u8(c2_first),
+						       vget_low_u8(out_first),
+						       vget_low_u8(c2_second),
+						       vget_low_u8(out_second),
+						       q, center, d2_bound);
+		packed_high = enc_neon_recover_d2_pack8(vget_high_u8(c2_first),
+							vget_high_u8(out_first),
+							vget_high_u8(c2_second),
+							vget_high_u8(out_second),
+							q, center, d2_bound);
 
-		p_code[i >> 3] ^= packed;
-	}
-
-	if (i < vec_bound)
-	{
-		unsigned int rem = (unsigned int)(vec_bound - i);
-		int16x8_t temp1 = enc_neon_sub_mod_q8(enc_load_u8_tail(c2 + i, rem),
-						      enc_load_u8_tail(out + i, rem));
-		int16x8_t temp2 = enc_neon_sub_mod_q8(enc_load_u8_tail(c2 + vec_bound + i, rem),
-						      enc_load_u8_tail(out + vec_bound + i, rem));
-		uint16x8_t mask1 = vcltq_s16(temp1, center);
-		uint16x8_t mask2 = vcltq_s16(temp2, center);
-		int16x8_t flip1 = vsubq_s16(q, temp1);
-		int16x8_t flip2 = vsubq_s16(q, temp2);
-		int16x8_t merged;
-		uint8_t packed;
-
-		temp1 = vbslq_s16(mask1, flip1, temp1);
-		temp2 = vbslq_s16(mask2, flip2, temp2);
-		merged = vsubq_s16(vaddq_s16(temp1, temp2), q);
-		packed = enc_neon_pack8_u16(vcltq_s16(merged, d2_bound));
-		p_code[i >> 3] ^= (uint8_t)(packed & enc_tail_bitmask(rem));
+		p_code[i >> 3] ^= packed_low;
+		p_code[(i >> 3) + 1] ^= packed_high;
 	}
 }
 #endif
@@ -570,7 +621,7 @@ int crypto_encrypt_keypair( unsigned char *pk, unsigned char *sk)
 int crypto_encrypt( unsigned char *c, unsigned long long *clen, const unsigned char *m, unsigned long long mlen, const unsigned char *pk)
 {
 	//check parameter
-	if(c==NULL || m==NULL || pk==NULL)
+	if(c==NULL || clen==NULL || m==NULL || pk==NULL)
 	{
 		return -1;
 	}
@@ -580,9 +631,7 @@ int crypto_encrypt( unsigned char *c, unsigned long long *clen, const unsigned c
 	}
 	
 	//call pke encryption function
-	pke_enc(pk,m, mlen,c,clen);
-
-	return 0;
+	return pke_enc(pk,m, mlen,c,clen);
 }
 //decryption
 int crypto_encrypt_open(unsigned char *m, unsigned long long *mlen,const unsigned char *c, unsigned long long clen,const unsigned char *sk)
@@ -592,11 +641,9 @@ int crypto_encrypt_open(unsigned char *m, unsigned long long *mlen,const unsigne
 	{
 		return -1;
 	}
-	
-	//call pke decryption function
-	pke_dec(sk,c,clen,m,mlen);
 
-	return 0;
+	//call pke decryption function
+	return pke_dec(sk,c,clen,m,mlen);
 }
 
 //key generation with seed
@@ -606,7 +653,7 @@ int kg_seed(unsigned char *pk, unsigned char *sk, unsigned char *seed)
 	unsigned char a[DIM_N];
 	lac_small_t e[DIM_N];
 	//check pointer
-	if(pk==NULL || sk==NULL)
+	if(pk==NULL || sk==NULL || seed==NULL)
 	{
 		return -1;
 	}
@@ -646,11 +693,30 @@ int kg(unsigned char *pk, unsigned char *sk)
 int pke_enc(const unsigned char *pk, const unsigned char *m, unsigned long long mlen, unsigned char *c, unsigned long long *clen)
 {
 	unsigned char seed[SEED_LEN];
-	
+
+	if(pk==NULL || m==NULL || c==NULL || clen==NULL)
+	{
+		return -1;
+	}
+	if(mlen>MESSAGE_LEN)
+	{
+		return -1;
+	}
+#ifdef LAC256
+	if(!pke_d2_recover16_aligned_mlen(mlen))
+	{
+		return -1;
+	}
+#endif
+
 	//generate seed
 	random_bytes(seed,SEED_LEN);
 	//encrypt with seed 
-	pke_enc_seed(pk,m,mlen,c,clen,seed);	
+	if(pke_enc_seed(pk,m,mlen,c,clen,seed) != 0)
+	{
+		LAC_SECURE_CLEAR(seed, sizeof(seed));
+		return -1;
+	}
 	LAC_SECURE_CLEAR(seed, sizeof(seed));
 
 	return 0;
@@ -661,20 +727,28 @@ int pke_dec(const unsigned char *sk, const unsigned char *c,unsigned long long c
 	unsigned char out[DIM_N];
 	unsigned char code[CODE_LEN],*p_code;
 	unsigned char c2[C2_VEC_NUM];
-	int c2_len=(clen-DIM_N)*2;
+	int c2_len;
 	unsigned char m_buf[MESSAGE_LEN];
-	
+	unsigned long long decoded_mlen;
+
 	//check parameter
-	if(sk==NULL || m==NULL || c==NULL)
+	if(sk==NULL || m==NULL || c==NULL || mlen==NULL)
 	{
 		return -1;
 	}
-	
+	if(pke_dec_decode_lengths(clen, &c2_len, &decoded_mlen) != 0)
+	{
+		return -1;
+	}
+
 	#ifdef LAC256 //D2 decoding
-	
+
 	int vec_bound=c2_len/2;
-	//compute mlen
-	*mlen=c2_len/16-ECC_LEN;
+	if((vec_bound & 15) != 0)
+	{
+		return -1;
+	}
+	*mlen = decoded_mlen;
 	//shif the pointer of ecc data
 	p_code=code+(DATA_LEN-(*mlen));
 	//init code
@@ -697,11 +771,10 @@ int pke_dec(const unsigned char *sk, const unsigned char *c,unsigned long long c
 	poly_decompress(c+DIM_N,c2,c2_len);
 	//c1*sk
 	poly_mul(c,(lac_small_t*)sk,out,DIM_N);
-	//compute mlen
-	*mlen=c2_len/8-ECC_LEN;
 	//init code
 	memset(code,0,CODE_LEN);
 	//shift the pointer of code
+	*mlen = decoded_mlen;
 	p_code=code+(DATA_LEN-(*mlen));
 
 	pke_recover_msg(c2, out, p_code, c2_len);
@@ -731,7 +804,7 @@ int pke_enc_seed(const unsigned char *pk, const unsigned char *m, unsigned long 
 	int c2_len;
 	
 	//check parameter
-	if(pk==NULL || m==NULL || c==NULL )
+	if(pk==NULL || m==NULL || c==NULL || clen==NULL || seed==NULL)
 	{
 		return -1;
 	}
@@ -739,7 +812,13 @@ int pke_enc_seed(const unsigned char *pk, const unsigned char *m, unsigned long 
 	{
 		return -1;
 	}
-	
+#ifdef LAC256
+	if(!pke_d2_recover16_aligned_mlen(mlen))
+	{
+		return -1;
+	}
+#endif
+
 	//generate  a from seed in the first part of pk
 	gen_a(a,pk);
 	//package m_buf
