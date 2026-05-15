@@ -57,9 +57,16 @@ static int pke_dec_decode_lengths(unsigned long long clen,
 	return 0;
 }
 
-static int pke_recover16_aligned_mlen(unsigned long long mlen)
+static int pke_recover_aligned_mlen(unsigned long long mlen)
 {
-	return ((((mlen + (unsigned long long)ECC_LEN) * 8ULL) & 15ULL) == 0ULL);
+	const unsigned long long recover_len =
+		(mlen + (unsigned long long)ECC_LEN) * 8ULL;
+
+#if defined(LAC192)
+	return ((recover_len & 7ULL) == 0ULL);
+#else
+	return ((recover_len & 15ULL) == 0ULL);
+#endif
 }
 
 static inline uint32_t enc_ct_mask_lt_u32(uint32_t a, uint32_t b)
@@ -255,45 +262,59 @@ static void LAC_ENC_UNUSED_FN pke_recover_msg_std(const unsigned char *c2,
 	}
 }
 
+static unsigned char pke_recover_msg_ct_pack8_scalar(const unsigned char *c2,
+						     const unsigned char *out,
+						     int low,
+						     int high,
+						     int n)
+{
+	int j;
+	unsigned char packed = 0;
+
+	for(j=0;j<n;j++)
+	{
+		int temp=enc_sub_mod_q_u8(c2[j], out[j]);
+		uint32_t bit_mask =
+			enc_ct_mask_ge_u32((uint32_t)temp, (uint32_t)low) &
+			enc_ct_mask_lt_u32((uint32_t)temp, (uint32_t)high) &
+			(1u << j);
+
+		packed ^= (unsigned char)bit_mask;
+	}
+
+	return packed;
+}
+
 static void LAC_ENC_UNUSED_FN pke_recover_msg_ct_scalar(const unsigned char *c2,
 							const unsigned char *out,
 							unsigned char *p_code,
 							int c2_len)
 {
-	int i, j;
+	int i;
+	const int vec_len = c2_len & ~15;
 	const int low = Q/4;
 	const int high = Q*3/4;
 
-	for(i=0;i<c2_len;i+=16)
+	for(i=0;i<vec_len;i+=16)
 	{
-		unsigned char packed_low = 0;
-		unsigned char packed_high = 0;
-
-		for(j=0;j<8;j++)
-		{
-			int temp=enc_sub_mod_q_u8(c2[i+j], out[i+j]);
-			uint32_t bit_mask =
-				enc_ct_mask_ge_u32((uint32_t)temp, (uint32_t)low) &
-				enc_ct_mask_lt_u32((uint32_t)temp, (uint32_t)high) &
-				(1u << j);
-
-			packed_low ^= (unsigned char)bit_mask;
-		}
-		for(j=0;j<8;j++)
-		{
-			int pos = i + 8 + j;
-			int temp=enc_sub_mod_q_u8(c2[pos], out[pos]);
-			uint32_t bit_mask =
-				enc_ct_mask_ge_u32((uint32_t)temp, (uint32_t)low) &
-				enc_ct_mask_lt_u32((uint32_t)temp, (uint32_t)high) &
-				(1u << j);
-
-			packed_high ^= (unsigned char)bit_mask;
-		}
-
-		p_code[i >> 3] ^= packed_low;
-		p_code[(i >> 3) + 1] ^= packed_high;
+		p_code[i >> 3] ^= pke_recover_msg_ct_pack8_scalar(c2 + i,
+								   out + i,
+								   low, high, 8);
+		p_code[(i >> 3) + 1] ^=
+			pke_recover_msg_ct_pack8_scalar(c2 + i + 8,
+							out + i + 8,
+								low, high, 8);
 	}
+
+#if defined(LAC192)
+	if(i<c2_len)
+	{
+		p_code[i >> 3] ^= pke_recover_msg_ct_pack8_scalar(c2 + i,
+								   out + i,
+								   low, high,
+								   8);
+	}
+#endif
 }
 
 #if LAC_CFG_CT_NEON_PKE_THRESHOLD_DEC
@@ -303,10 +324,11 @@ static void pke_recover_msg_ct_neon(const unsigned char *c2,
 				    int c2_len)
 {
 	int i;
+	const int vec_len = c2_len & ~15;
 	const int16x8_t low = vdupq_n_s16((int16_t)(Q/4));
 	const int16x8_t high = vdupq_n_s16((int16_t)(Q*3/4));
 
-	for (i = 0; i < c2_len; i += 16)
+	for (i = 0; i < vec_len; i += 16)
 	{
 		uint8x16_t c2v = vld1q_u8(c2 + i);
 		uint8x16_t outv = vld1q_u8(out + i);
@@ -323,6 +345,15 @@ static void pke_recover_msg_ct_neon(const unsigned char *c2,
 		p_code[i >> 3] ^= packed_low;
 		p_code[(i >> 3) + 1] ^= packed_high;
 	}
+
+#if defined(LAC192)
+	if(i<c2_len)
+	{
+		p_code[i >> 3] ^= enc_neon_recover_pack8(vld1_u8(c2 + i),
+							 vld1_u8(out + i),
+							 low, high);
+	}
+#endif
 }
 #endif
 
@@ -376,71 +407,59 @@ static void LAC_ENC_UNUSED_FN pke_recover_msg_d2_std(const unsigned char *c2,
 	}
 }
 
+static unsigned char pke_recover_msg_d2_ct_pack8_scalar(const unsigned char *c2,
+							const unsigned char *out,
+							int vec_bound,
+							int base,
+							int n)
+{
+	int j;
+	const int center_point=Q/2;
+	const int d2_bound=Q/2;
+	unsigned char packed = 0;
+
+	for(j=0;j<n;j++)
+	{
+		int pos = base + j;
+		int temp1=enc_sub_mod_q_u8(c2[pos], out[pos]);
+		int temp2=enc_sub_mod_q_u8(c2[pos+vec_bound], out[pos+vec_bound]);
+		uint32_t mask1 = enc_ct_mask_lt_u32((uint32_t)temp1,
+						    (uint32_t)center_point);
+		uint32_t mask2 = enc_ct_mask_lt_u32((uint32_t)temp2,
+						    (uint32_t)center_point);
+		uint32_t bit_mask;
+
+		temp1 = (int)enc_ct_select_u32(mask1, (uint32_t)(Q-temp1),
+					       (uint32_t)temp1);
+		temp2 = (int)enc_ct_select_u32(mask2, (uint32_t)(Q-temp2),
+					       (uint32_t)temp2);
+		temp1+=temp2-Q;
+		bit_mask =
+			enc_ct_mask_lt_u32((uint32_t)temp1,
+					   (uint32_t)d2_bound) &
+			(1u << j);
+
+		packed ^= (unsigned char)bit_mask;
+	}
+
+	return packed;
+}
+
 static void LAC_ENC_UNUSED_FN pke_recover_msg_d2_ct_scalar(const unsigned char *c2,
 							   const unsigned char *out,
 							   unsigned char *p_code,
 							   int vec_bound)
 {
-	int i, j;
-	const int center_point=Q/2;
-	const int d2_bound=Q/2;
+	int i;
 
 	for(i=0;i<vec_bound;i+=16)
 	{
-		unsigned char packed_low = 0;
-		unsigned char packed_high = 0;
-
-		for(j=0;j<8;j++)
-		{
-			int pos = i + j;
-			int temp1=enc_sub_mod_q_u8(c2[pos], out[pos]);
-			int temp2=enc_sub_mod_q_u8(c2[pos+vec_bound], out[pos+vec_bound]);
-			uint32_t mask1 = enc_ct_mask_lt_u32((uint32_t)temp1,
-							    (uint32_t)center_point);
-			uint32_t mask2 = enc_ct_mask_lt_u32((uint32_t)temp2,
-							    (uint32_t)center_point);
-			uint32_t bit_mask =
-				0;
-
-			temp1 = (int)enc_ct_select_u32(mask1, (uint32_t)(Q-temp1),
-						       (uint32_t)temp1);
-			temp2 = (int)enc_ct_select_u32(mask2, (uint32_t)(Q-temp2),
-						       (uint32_t)temp2);
-			temp1+=temp2-Q;
-			bit_mask =
-				enc_ct_mask_lt_u32((uint32_t)temp1,
-						   (uint32_t)d2_bound) &
-				(1u << j);
-
-			packed_low ^= (unsigned char)bit_mask;
-		}
-		for(j=0;j<8;j++)
-		{
-			int pos = i + 8 + j;
-			int temp1=enc_sub_mod_q_u8(c2[pos], out[pos]);
-			int temp2=enc_sub_mod_q_u8(c2[pos+vec_bound], out[pos+vec_bound]);
-			uint32_t mask1 = enc_ct_mask_lt_u32((uint32_t)temp1,
-							    (uint32_t)center_point);
-			uint32_t mask2 = enc_ct_mask_lt_u32((uint32_t)temp2,
-							    (uint32_t)center_point);
-			uint32_t bit_mask =
-				0;
-
-			temp1 = (int)enc_ct_select_u32(mask1, (uint32_t)(Q-temp1),
-						       (uint32_t)temp1);
-			temp2 = (int)enc_ct_select_u32(mask2, (uint32_t)(Q-temp2),
-						       (uint32_t)temp2);
-			temp1+=temp2-Q;
-			bit_mask =
-				enc_ct_mask_lt_u32((uint32_t)temp1,
-						   (uint32_t)d2_bound) &
-				(1u << j);
-
-			packed_high ^= (unsigned char)bit_mask;
-		}
-
-		p_code[i >> 3] ^= packed_low;
-		p_code[(i >> 3) + 1] ^= packed_high;
+		p_code[i >> 3] ^=
+			pke_recover_msg_d2_ct_pack8_scalar(c2, out,
+							   vec_bound, i, 8);
+		p_code[(i >> 3) + 1] ^=
+			pke_recover_msg_d2_ct_pack8_scalar(c2, out,
+							   vec_bound, i + 8, 8);
 	}
 }
 
@@ -734,7 +753,7 @@ int pke_enc(const unsigned char *pk, const unsigned char *m, unsigned long long 
 	{
 		return -1;
 	}
-	if(!pke_recover16_aligned_mlen(mlen))
+	if(!pke_recover_aligned_mlen(mlen))
 	{
 		return -1;
 	}
@@ -796,7 +815,11 @@ int pke_dec(const unsigned char *sk, const unsigned char *c,unsigned long long c
 
 	#else
 
+#if defined(LAC192)
+	if((c2_len & 7) != 0)
+#else
 	if((c2_len & 15) != 0)
+#endif
 	{
 		return -1;
 	}
@@ -846,7 +869,7 @@ int pke_enc_seed(const unsigned char *pk, const unsigned char *m, unsigned long 
 	{
 		return -1;
 	}
-	if(!pke_recover16_aligned_mlen(mlen))
+	if(!pke_recover_aligned_mlen(mlen))
 	{
 		return -1;
 	}
