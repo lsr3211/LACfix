@@ -443,6 +443,41 @@ static void syndrome_accum_even4_ct_neon(struct bch_control *bch,
 			syn[idx] = cur_buf[lane];
 	}
 }
+
+static void fill_odd_syndromes_ct_neon(struct bch_control *bch,
+				       unsigned int *syn,
+				       int t)
+{
+	unsigned int start, stride, limit = (unsigned int)t;
+
+	for (start = 0, stride = 2; start < limit;
+	     start = 2*start + 1, stride <<= 1) {
+		unsigned int i;
+
+		for (i = start; i + 3*stride < limit; i += 4*stride) {
+			uint32_t in[4];
+			uint32_t out[4];
+			uint32x4_t v, sq;
+
+			in[0] = syn[i + 0*stride];
+			in[1] = syn[i + 1*stride];
+			in[2] = syn[i + 2*stride];
+			in[3] = syn[i + 3*stride];
+
+			v = vld1q_u32(in);
+			sq = ct_gf_mul4(bch, v, v);
+			vst1q_u32(out, sq);
+
+			syn[2*(i + 0*stride) + 1] = out[0];
+			syn[2*(i + 1*stride) + 1] = out[1];
+			syn[2*(i + 2*stride) + 1] = out[2];
+			syn[2*(i + 3*stride) + 1] = out[3];
+		}
+
+		for (; i < limit; i += stride)
+			syn[2*i+1] = ct_gf_sqr(bch, syn[i]);
+	}
+}
 #endif
 #endif
 
@@ -545,14 +580,7 @@ static void compute_syndromes_data_ecc_ct_neon(struct bch_control *bch,
 		}
 	}
 
-	for (byte_idx = 0; byte_idx < (unsigned int)t; byte_idx++) {
-		uint32_t out_buf[4];
-
-		vst1q_u32(out_buf,
-			  ct_gf_mul4(bch, vdupq_n_u32(syn[byte_idx]),
-				     vdupq_n_u32(syn[byte_idx])));
-		syn[2*byte_idx+1] = out_buf[0];
-	}
+	fill_odd_syndromes_ct_neon(bch, syn, t);
 }
 #endif
 
@@ -622,14 +650,7 @@ static void compute_syndromes_ct_neon(struct bch_control *bch, uint32_t *ecc,
 		}
 	} while (s > 0);
 
-	for (j = 0; j < t; j++) {
-		uint32_t out_buf[4];
-
-		vst1q_u32(out_buf,
-			  ct_gf_mul4(bch, vdupq_n_u32(syn[j]),
-				     vdupq_n_u32(syn[j])));
-		syn[2*j+1] = out_buf[0];
-	}
+	fill_odd_syndromes_ct_neon(bch, syn, t);
 }
 #endif
 
@@ -668,6 +689,27 @@ static inline uint32_t ct_select_u32(uint32_t mask, uint32_t x, uint32_t y)
 static inline int ct_select_int(uint32_t mask, int x, int y)
 {
 	return (int)ct_select_u32(mask, (uint32_t)x, (uint32_t)y);
+}
+
+static int bch_validate_root_count_ct(int err, int nroots)
+{
+	uint32_t mask_err_pos = 0u - (uint32_t)(err > 0);
+	uint32_t mask_err_zero = 0u - (uint32_t)(err == 0);
+	uint32_t fail = 0;
+
+	fail |= mask_err_pos &
+		ct_mask_nonzero_u32((uint32_t)err ^ (uint32_t)nroots);
+	fail |= mask_err_zero & ct_mask_nonzero_u32((uint32_t)nroots);
+	fail |= 0u - (uint32_t)(err < 0);
+
+	return ct_select_int(ct_mask_nonzero_u32(fail), -1, err);
+}
+
+static int bch_decode_result_ct(int err)
+{
+	uint32_t fail_mask = 0u - (uint32_t)(err < 0);
+
+	return ct_select_int(fail_mask, -EBADMSG, err);
 }
 
 static unsigned int ct_gf_mul(struct bch_control *bch, unsigned int a,
@@ -761,8 +803,8 @@ static uint32x4_t ct_gf_inv4(struct bch_control *bch, uint32x4_t a)
 	return vandq_u32(r, nonzero);
 }
 
-static uint32x4_t ct_gf_div4(struct bch_control *bch, uint32x4_t a,
-			     uint32x4_t b)
+static uint32x4_t BCH_STD_UNUSED ct_gf_div4(struct bch_control *bch,
+					    uint32x4_t a, uint32x4_t b)
 {
 	uint32x4_t nonzero = vmvnq_u32(vceqq_u32(a, vdupq_n_u32(0)));
 
@@ -1050,17 +1092,13 @@ static int compute_error_locator_polynomial_ct_neon(struct bch_control *bch,
 		uint32_t mask_update, mask_k_nonneg;
 		uint32_t cand_deg, k_u32;
 		unsigned int scale;
-		uint32_t scale_buf[4];
 
 		k = 2*(int)i - old_pp;
 		k_u32 = (uint32_t)k;
 		mask_k_nonneg = 0u - (uint32_t)(k >= 0);
 
 		gf_poly_copy_fixed_neon(elp_copy, elp, t);
-		vst1q_u32(scale_buf,
-			  ct_gf_div4(bch, vdupq_n_u32(old_d),
-				     vdupq_n_u32(old_pd)));
-		scale = scale_buf[0];
+		scale = ct_gf_div(bch, old_d, old_pd);
 
 			for (j = 0; j <= t; j += 4) {
 				unsigned int lane, u;
@@ -1891,22 +1929,12 @@ have_syndromes:
 	#else
 	err = compute_error_locator_polynomial_ct(bch, syn);
 	#endif
-	#if LAC_CFG_CT_NEON_BCH_CHIEN
+#if LAC_CFG_CT_NEON_BCH_CHIEN
 	nroots = chien_search_ct_neon(bch, len, bch->elp, errloc);
-	#else
+#else
 	nroots = chien_search_ct(bch, len, bch->elp, errloc);
-	#endif
-		{
-			uint32_t mask_err_pos = 0u - (uint32_t)(err > 0);
-			uint32_t mask_err_zero = 0u - (uint32_t)(err == 0);
-			uint32_t fail = 0;
-
-			fail |= mask_err_pos &
-				ct_mask_nonzero_u32((uint32_t)err ^ (uint32_t)nroots);
-			fail |= mask_err_zero & ct_mask_nonzero_u32((uint32_t)nroots);
-			fail |= 0u - (uint32_t)(err < 0);
-			err = ct_select_int(ct_mask_nonzero_u32(fail), -1, err);
-		}
+#endif
+	err = bch_validate_root_count_ct(err, nroots);
 	#else
 	err = compute_error_locator_polynomial(bch, syn);
 	if (err > 0) {
@@ -1926,10 +1954,12 @@ have_syndromes:
 			for (i = 0; i < (int)bch->t; i++) {
 				uint32_t mask_valid = mask_err_pos &
 					ct_mask_lt_u32((unsigned int)i, err_u);
-				uint32_t mask_in_range = ct_mask_lt_u32(errloc[i], nbits);
-				unsigned int loc = nbits-1-errloc[i];
+				uint32_t raw = errloc[i];
+				uint32_t mask_in_range = ct_mask_lt_u32(raw, nbits);
+				uint32_t safe_raw = ct_select_u32(mask_in_range, raw, 0);
+				unsigned int loc = nbits - 1u - safe_raw;
 
-			loc = (loc & ~7)|(7-(loc & 7));
+				loc = (loc & ~7)|(7-(loc & 7));
 				errloc[i] = ct_select_u32(mask_valid, loc, errloc[i]);
 				invalid |= mask_valid & ~mask_in_range;
 			}
@@ -1948,10 +1978,7 @@ have_syndromes:
 	}
 	#endif
 #if LAC_CFG_CT_BCH
-	{
-		uint32_t ok_mask = ~((uint32_t)err >> 31);
-		return ct_select_int(ok_mask, err, -EBADMSG);
-	}
+	return bch_decode_result_ct(err);
 #else
 	return (err >= 0) ? err : -EBADMSG;
 #endif
@@ -1994,7 +2021,9 @@ int decode_bch_pure_c(struct bch_control *bch, const uint8_t *data,
 	else
 		nroots = err;
 
-	if (err > 0 && nroots != err)
+	if ((err > 0 && nroots != err) ||
+	    (err == 0 && nroots != 0) ||
+	    err < 0)
 		return -EBADMSG;
 	nbits = (len*8)+bch->ecc_bits;
 	for (i = 0; i < nroots; i++) {
@@ -2051,17 +2080,7 @@ int decode_bch_ct_scalar(struct bch_control *bch, const uint8_t *data,
 have_syndromes:
 	err = compute_error_locator_polynomial_ct(bch, syn);
 	nroots = chien_search_ct(bch, len, bch->elp, errloc);
-	{
-		uint32_t mask_err_pos = 0u - (uint32_t)(err > 0);
-		uint32_t mask_err_zero = 0u - (uint32_t)(err == 0);
-		uint32_t fail = 0;
-
-		fail |= mask_err_pos &
-			ct_mask_nonzero_u32((uint32_t)err ^ (uint32_t)nroots);
-		fail |= mask_err_zero & ct_mask_nonzero_u32((uint32_t)nroots);
-		fail |= 0u - (uint32_t)(err < 0);
-		err = ct_select_int(ct_mask_nonzero_u32(fail), -1, err);
-	}
+	err = bch_validate_root_count_ct(err, nroots);
 
 	nbits = (len*8)+bch->ecc_bits;
 	{
@@ -2072,8 +2091,10 @@ have_syndromes:
 		for (i = 0; i < (int)bch->t; i++) {
 			uint32_t mask_valid = mask_err_pos &
 				ct_mask_lt_u32((unsigned int)i, err_u);
-			uint32_t mask_in_range = ct_mask_lt_u32(errloc[i], nbits);
-			unsigned int loc = nbits-1-errloc[i];
+			uint32_t raw = errloc[i];
+			uint32_t mask_in_range = ct_mask_lt_u32(raw, nbits);
+			uint32_t safe_raw = ct_select_u32(mask_in_range, raw, 0);
+			unsigned int loc = nbits - 1u - safe_raw;
 
 			loc = (loc & ~7)|(7-(loc & 7));
 			errloc[i] = ct_select_u32(mask_valid, loc, errloc[i]);
@@ -2081,10 +2102,7 @@ have_syndromes:
 		}
 		err = ct_select_int(ct_mask_nonzero_u32(invalid), -1, err);
 	}
-	{
-		uint32_t ok_mask = ~((uint32_t)err >> 31);
-		return ct_select_int(ok_mask, err, -EBADMSG);
-	}
+	return bch_decode_result_ct(err);
 #else
 	return -EINVAL;
 #endif
@@ -2125,7 +2143,9 @@ static void bch_map_errloc_ct_neon(struct bch_control *bch,
 		uint32x4_t mask_i = vandq_u32(mask_err_pos_vec,
 					       vcltq_u32(slot_vec, err_vec));
 		uint32x4_t in_range = vcltq_u32(loc, nbits_vec);
-		uint32x4_t mapped = vsubq_u32(vsubq_u32(nbits_vec, one), loc);
+		uint32x4_t safe_loc = vbslq_u32(in_range, loc, vdupq_n_u32(0));
+		uint32x4_t mapped = vsubq_u32(vsubq_u32(nbits_vec, one),
+					       safe_loc);
 		uint32x4_t bit = vsubq_u32(seven, vandq_u32(mapped, seven));
 
 		mapped = vorrq_u32(vandq_u32(mapped, not_seven), bit);
@@ -2139,7 +2159,8 @@ static void bch_map_errloc_ct_neon(struct bch_control *bch,
 		uint32_t mask_i = mask_err_pos & ct_mask_lt_u32(i, err_u);
 		uint32_t loc = errloc[i];
 		uint32_t mask_in_range = ct_mask_lt_u32(loc, nbits);
-		uint32_t mapped = nbits-1-loc;
+		uint32_t safe_loc = ct_select_u32(mask_in_range, loc, 0);
+		uint32_t mapped = nbits - 1u - safe_loc;
 
 		mapped = (mapped & ~7u) | (7u-(mapped & 7u));
 		errloc[i] = ct_select_u32(mask_i, mapped, errloc[i]);
@@ -2191,23 +2212,10 @@ int decode_bch_ctneon(struct bch_control *bch, const uint8_t *data,
 have_syndromes:
 	err = compute_error_locator_polynomial_ct_neon(bch, syn);
 	nroots = chien_search_ct_neon(bch, len, bch->elp, errloc);
-	{
-		uint32_t mask_err_pos = 0u - (uint32_t)(err > 0);
-		uint32_t mask_err_zero = 0u - (uint32_t)(err == 0);
-		uint32_t fail = 0;
-
-		fail |= mask_err_pos &
-			ct_mask_nonzero_u32((uint32_t)err ^ (uint32_t)nroots);
-		fail |= mask_err_zero & ct_mask_nonzero_u32((uint32_t)nroots);
-		fail |= 0u - (uint32_t)(err < 0);
-		err = ct_select_int(ct_mask_nonzero_u32(fail), -1, err);
-	}
+	err = bch_validate_root_count_ct(err, nroots);
 	bch_map_errloc_ct_neon(bch, len, errloc, &err);
 
-	{
-		uint32_t ok_mask = ~((uint32_t)err >> 31);
-		return ct_select_int(ok_mask, err, -EBADMSG);
-	}
+	return bch_decode_result_ct(err);
 #else
 	return -EINVAL;
 #endif
